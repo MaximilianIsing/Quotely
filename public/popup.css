@@ -316,15 +316,15 @@ body {
     position: absolute;
     right: 100%;
     bottom: 100%;
-    transform: translateY(-8px) translateX(-8px);
+    transform: translateY(30px) translateX(-8px);
     background: #111827;
     color: #ffffff;
     padding: 10px 14px;
     border: 1px solid #374151;
     font-size: 13px;
     line-height: 1.4;
-    max-width: 320px;
-    min-width: 200px;
+    max-width: 250px;
+    min-width: 240px;
     white-space: normal;
     box-shadow: 0 4px 12px rgba(0,0,0,0.25);
     opacity: 0;
@@ -335,7 +335,7 @@ body {
 }
 .quote-help:hover::after {
     opacity: 1;
-    transform: translateY(-8px) translateX(-8px);
+    transform: translateY(30px) translateX(-8px);
 }
 
 .citation-display {

@@ -3,9 +3,9 @@ async function generateCitation(url, style = 'APA') {
     try {
         let puppeteer;
         try {
-            puppeteer = require('puppeteer');
+            puppeteer = require('puppeteer-core');
         } catch (e) {
-            throw new Error('Puppeteer not installed. Run: npm install puppeteer');
+            throw new Error('Puppeteer-core not installed. Run: npm install puppeteer-core');
         }
         
         // Debug: Log environment info
@@ -15,25 +15,13 @@ async function generateCitation(url, style = 'APA') {
             NODE_ENV: process.env.NODE_ENV
         });
 
-        // Try different Chrome paths
-        const possiblePaths = [
-            process.env.PUPPETEER_EXECUTABLE_PATH,
-            '/opt/render/.cache/puppeteer/chrome-linux64/chrome',
-            '/opt/render/.cache/puppeteer/chrome/chrome',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser'
-        ];
+        // Use system Chrome or specified path
+        const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 
+                              '/usr/bin/google-chrome' || 
+                              '/usr/bin/chromium-browser' ||
+                              '/usr/bin/chromium';
 
-        let executablePath;
-        for (const path of possiblePaths) {
-            if (path && require('fs').existsSync(path)) {
-                executablePath = path;
-                console.log('Found Chrome at:', path);
-                break;
-            }
-        }
-
-        console.log('Using executablePath:', executablePath || 'default (let Puppeteer find it)');
+        console.log('Using executablePath:', executablePath);
 
         const browser = await puppeteer.launch({ 
             headless: 'new',
