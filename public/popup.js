@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://your-actual-render-url.onrender.com';
+        this.serverUrl = 'https://quotely-rmgh.onrender.com';
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.storageKey = 'quotely_last_session';

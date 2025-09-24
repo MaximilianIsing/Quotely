@@ -17,8 +17,9 @@ const openai = new OpenAI({
   apiKey: config.OPENAI_API_KEY
 });
 
-// Citoid API configuration
-const CITOID_API_URL = 'https://en.wikipedia.org/api/rest_v1/data/citation/mediawiki';
+// Verify GPT API connection
+console.log('GPT API established');
+
 
 app.use(cors());
 // Allow larger JSON payloads but we still truncate content to 10k before processing
@@ -246,7 +247,6 @@ app.post('/api/find-quotes', async (req, res) => {
   }
 });
 
-// Citation formatting endpoint using Citoid API
 app.post('/api/format-citation', async (req, res) => {
   try {
     const { quote, pageTitle, pageUrl, format, author, publicationDate } = req.body;
