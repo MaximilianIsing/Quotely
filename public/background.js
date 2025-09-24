@@ -8,7 +8,7 @@ chrome.runtime.onInstalled.addListener((details) => {
         // Set up default storage values
         chrome.storage.sync.set({
             citationFormat: 'MLA',
-            serverUrl: 'http://localhost:3000'
+            serverUrl: 'https://quotely-rmgh.onrender.com'
         });
     }
 });

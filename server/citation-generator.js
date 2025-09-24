@@ -15,6 +15,26 @@ async function generateCitation(url, style = 'APA') {
             NODE_ENV: process.env.NODE_ENV
         });
 
+        // Try different Chrome paths
+        const possiblePaths = [
+            process.env.PUPPETEER_EXECUTABLE_PATH,
+            '/opt/render/.cache/puppeteer/chrome-linux64/chrome',
+            '/opt/render/.cache/puppeteer/chrome/chrome',
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser'
+        ];
+
+        let executablePath;
+        for (const path of possiblePaths) {
+            if (path && require('fs').existsSync(path)) {
+                executablePath = path;
+                console.log('Found Chrome at:', path);
+                break;
+            }
+        }
+
+        console.log('Using executablePath:', executablePath || 'default (let Puppeteer find it)');
+
         const browser = await puppeteer.launch({ 
             headless: 'new',
             args: [
@@ -29,7 +49,7 @@ async function generateCitation(url, style = 'APA') {
                 '--disable-web-security',
                 '--disable-features=VizDisplayCompositor'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/opt/render/.cache/puppeteer/chrome-linux64/chrome'
+            executablePath: executablePath
         });
         const page = await browser.newPage();
         
