@@ -15,11 +15,27 @@ async function generateCitation(url, style = 'APA') {
             NODE_ENV: process.env.NODE_ENV
         });
 
-        // Use system Chrome or specified path
-        const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || 
-                              '/usr/bin/google-chrome' || 
-                              '/usr/bin/chromium-browser' ||
-                              '/usr/bin/chromium';
+        // Use specified path or try common locations
+        const possiblePaths = [
+            process.env.PUPPETEER_EXECUTABLE_PATH,
+            '/opt/render/.cache/puppeteer/chrome-linux64/chrome',
+            '/opt/render/.cache/puppeteer/chrome/chrome',
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser'
+        ];
+
+        let executablePath = null;
+        for (const path of possiblePaths) {
+            if (path && require('fs').existsSync(path)) {
+                executablePath = path;
+                console.log('Found Chrome at:', path);
+                break;
+            }
+        }
+
+        if (!executablePath) {
+            throw new Error('Chrome not found. Please ensure Chrome is installed during build process.');
+        }
 
         console.log('Using executablePath:', executablePath);
 
