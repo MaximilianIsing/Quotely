@@ -3,7 +3,7 @@ services:
     name: quotely-server
     env: node
     plan: free
-    buildCommand: npm install && npx puppeteer browsers install chrome
+    buildCommand: npm install && npx puppeteer browsers install chrome@140.0.7339.207
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -14,3 +14,5 @@ services:
         value: "true"
       - key: PUPPETEER_CACHE_DIR
         value: "/opt/render/.cache/puppeteer"
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: "/opt/render/.cache/puppeteer/chrome-linux64/chrome"

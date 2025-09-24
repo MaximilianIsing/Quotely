@@ -8,8 +8,15 @@ async function generateCitation(url, style = 'APA') {
             throw new Error('Puppeteer not installed. Run: npm install puppeteer');
         }
         
+        // Debug: Log environment info
+        console.log('Puppeteer environment:', {
+            PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH,
+            PUPPETEER_CACHE_DIR: process.env.PUPPETEER_CACHE_DIR,
+            NODE_ENV: process.env.NODE_ENV
+        });
+
         const browser = await puppeteer.launch({ 
-            headless: true,
+            headless: 'new',
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
@@ -18,9 +25,11 @@ async function generateCitation(url, style = 'APA') {
                 '--no-first-run',
                 '--no-zygote',
                 '--single-process',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor'
             ],
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/opt/render/.cache/puppeteer/chrome-linux64/chrome'
         });
         const page = await browser.newPage();
         
