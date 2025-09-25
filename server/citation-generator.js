@@ -2,10 +2,12 @@
 async function generateCitation(url, style = 'APA') {
     try {
         let puppeteer;
+        let chromium;
         try {
             puppeteer = require('puppeteer-core');
+            chromium = require('chromium');
         } catch (e) {
-            throw new Error('Puppeteer-core not installed. Run: npm install puppeteer-core');
+            throw new Error('Puppeteer-core or chromium not installed. Run: npm install puppeteer-core chromium');
         }
         
         // Debug: Log environment info
@@ -15,26 +17,41 @@ async function generateCitation(url, style = 'APA') {
             NODE_ENV: process.env.NODE_ENV
         });
 
-        // Use specified path or try common locations
-        const possiblePaths = [
-            process.env.PUPPETEER_EXECUTABLE_PATH,
-            '/opt/render/.cache/puppeteer/chrome-linux64/chrome',
-            '/opt/render/.cache/puppeteer/chrome/chrome',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser'
-        ];
-
+        // Use chromium package as primary option, fallback to other paths
         let executablePath = null;
-        for (const path of possiblePaths) {
-            if (path && require('fs').existsSync(path)) {
-                executablePath = path;
-                console.log('Found Chrome at:', path);
-                break;
+        
+        // Try chromium package first
+        try {
+            const chromiumPath = chromium.path;
+            if (chromiumPath && require('fs').existsSync(chromiumPath)) {
+                executablePath = chromiumPath;
+                console.log('Found Chromium at:', chromiumPath);
+            }
+        } catch (e) {
+            console.log('Chromium package path not available:', e.message);
+        }
+
+        // Fallback to environment variable or common locations
+        if (!executablePath) {
+            const possiblePaths = [
+                process.env.PUPPETEER_EXECUTABLE_PATH,
+                '/opt/render/.cache/puppeteer/chrome-linux64/chrome',
+                '/opt/render/.cache/puppeteer/chrome/chrome',
+                '/usr/bin/google-chrome',
+                '/usr/bin/chromium-browser'
+            ];
+
+            for (const path of possiblePaths) {
+                if (path && require('fs').existsSync(path)) {
+                    executablePath = path;
+                    console.log('Found Chrome at:', path);
+                    break;
+                }
             }
         }
 
         if (!executablePath) {
-            throw new Error('Chrome not found. Please ensure Chrome is installed during build process.');
+            throw new Error('Chrome/Chromium not found. Please ensure Chrome is installed during build process.');
         }
 
         console.log('Using executablePath:', executablePath);
