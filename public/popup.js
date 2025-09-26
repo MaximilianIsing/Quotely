@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://quotely-rmgh.onrender.com';
+        this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.storageKey = 'quotely_last_session';
@@ -99,8 +99,8 @@ class QuotelyPopup {
             this.lastPageTitle = pageData.title || 'Current Page';
             this.lastPageUrl = pageData.url || 'Unknown URL';
             
-            // Enforce 10k character limit client-side
-            const limitedContent = (pageData.content || '').slice(0, 10000);
+            // Enforce 50k character limit client-side
+            const limitedContent = (pageData.content || '').slice(0, 50000);
 
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
@@ -482,7 +482,6 @@ class QuotelyPopup {
             // Use quote text as key, with page URL for uniqueness
             const citationKey = `${pageUrl}_${quoteText}`;
             
-            console.log('Saving citation for:', quoteText, 'key:', citationKey, 'visible:', isVisible);
             
             citations[citationKey] = {
                 data: citationData,
@@ -495,7 +494,7 @@ class QuotelyPopup {
             };
             
             localStorage.setItem(this.citationsKey, JSON.stringify(citations));
-            console.log('Citation saved successfully');
+
         } catch (error) {
             console.error('Failed to save citation:', error);
         }
@@ -506,10 +505,6 @@ class QuotelyPopup {
             const citations = JSON.parse(localStorage.getItem(this.citationsKey) || '{}');
             const currentPageUrl = this.lastPageUrl;
             
-            console.log('Restoring citations for page:', currentPageUrl);
-            console.log('Available citations:', Object.keys(citations));
-            console.log('Current format:', this.citationFormat.value);
-            
             if (!currentPageUrl) return;
             
             // Find citations for current page
@@ -519,14 +514,12 @@ class QuotelyPopup {
                     const quoteText = citationInfo.quoteText;
                     const format = citationInfo.format;
                     
-                    console.log('Found citation for quote:', quoteText, 'format:', format);
-                    
                     // Only restore if format matches current selection
                     if (format === this.citationFormat.value) {
-                        console.log('Restoring citation for:', quoteText);
+
                         this.displayStoredCitationByQuote(quoteText, citationInfo);
                     } else {
-                        console.log('Format mismatch, skipping:', quoteText);
+
                     }
                 }
             });
@@ -555,7 +548,7 @@ class QuotelyPopup {
         }
         
         if (!targetQuote || !targetIndex) {
-            console.log('Quote not found for citation restoration:', quoteText);
+
             return;
         }
         
@@ -564,7 +557,7 @@ class QuotelyPopup {
         
         // Check if citation is already displayed to avoid duplicate restoration
         if (citationDisplay.innerHTML.trim() !== '') {
-            console.log('Citation already exists for quote:', quoteText);
+
             return;
         }
         
@@ -883,7 +876,7 @@ class QuotelyPopup {
             quoteEntry.timestamp = Date.now();
             
             this.saveQuotesList(quotes);
-            console.log('Updated quote state:', quoteText, 'hasCitation:', hasCitation, 'isVisible:', isVisible);
+
         } catch (error) {
             console.error('Failed to update quote citation state:', error);
         }
@@ -923,7 +916,7 @@ class QuotelyPopup {
             // Remove all quotes for current page (keep pinned quotes from other pages)
             const filteredQuotes = quotes.filter(q => q.pageUrl !== currentPageUrl);
             this.saveQuotesList(filteredQuotes);
-            console.log('Cleared quotes for page:', currentPageUrl);
+
         } catch (error) {
             console.error('Failed to clear current page quotes:', error);
         }
@@ -942,8 +935,7 @@ class QuotelyPopup {
                     this.displayStoredCitationByQuote(quoteText, citationState);
                 }
             });
-            
-            console.log('Restored citation states for all quotes');
+ 
         } catch (error) {
             console.error('Failed to restore citation states:', error);
         }
