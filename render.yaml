@@ -14,3 +14,9 @@ services:
         value: "/opt/render/.cache/puppeteer/chrome-linux64/chrome"
       - key: PUPPETEER_CACHE_DIR
         value: "/opt/render/.cache/puppeteer"
+      - key: STORAGE_DIR
+        value: "/storage"
+    disk:
+      name: quotely-storage
+      mountPath: /storage
+      sizeGB: 1

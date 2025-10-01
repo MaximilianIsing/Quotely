@@ -22,7 +22,7 @@ console.log('GPT API established');
 
 
 app.use(cors());
-// Allow larger JSON payloads but we still truncate content to 10k before processing
+// Allow larger JSON payloads but we still truncate content to 50k before processing
 app.use(express.json({ limit: '3mb' }));
 
 // Ensure logs directory and CSV exist (use external storage folder for hosting)
@@ -108,7 +108,6 @@ app.post('/api/find-quotes', async (req, res) => {
     const searchResults = fuse.search(topic);
 
     // Build candidate segments using a hybrid relevance heuristic
-    const maxSegments = 150; // allow more quotes to pass through
     const minLen = 20;  // Lower minimum length
     const maxLen = 500; // Higher maximum length
 
@@ -158,93 +157,26 @@ app.post('/api/find-quotes', async (req, res) => {
     scored.sort((a, b) => b.score - a.score);
 
     // Filter to sentences with any relevance signal - be more permissive
-    const filtered = scored.filter(e => 
+    // Allow fuzzy matching alone with a decent score, or any keyword/topic matches
+    let filtered = scored.filter(e => 
       e.exactTopicMatch > 0 ||  // Contains exact topic
       e.keywordHits > 0 ||  // Has any keyword hits
-      e.fuzzy >= 0.1 ||  // Low fuzzy match threshold
-      e.score > 0.5  // Any decent score
+      e.fuzzy >= 0.3 ||  // Fuzzy match alone with decent similarity (30%+)
+      e.score > 0.8  // Any decent overall score
     );
+    
+    // If no filtered results, use all scored sentences as fallback
     if (filtered.length === 0) {
-      // If still no matches, include all sentences with any score
-      const allFiltered = scored.filter(e => e.score > 0);
-      if (allFiltered.length === 0) {
+      filtered = scored.filter(e => e.score > 0);
+      if (filtered.length === 0) {
         return res.json({ quotes: [], message: 'No relevant quotes found' });
       }
-      // Use all filtered results
-      scored.sort((a, b) => b.score - a.score);
-      const picked = scored.slice(0, Math.min(maxSegments, scored.length)).map(e => e.idx);
-      picked.sort((a, b) => a - b);
-      const relevantQuotes = picked.map(idx => sentences[idx]).filter(Boolean);
-      
-      // Use GPT to analyze and refine quotes
-      const prompt = `Analyze these text segments and find quotes that are HIGHLY SPECIFIC to the topic: "${topic}". 
-      Only select quotes that directly mention or discuss the specific topic keywords.
-      Do NOT include general quotes about the broader subject area unless they specifically mention the topic keywords.
-      Be very selective - it's better to return fewer quotes that are highly relevant than many quotes that are only tangentially related.
-      Preserve the original wording exactly. 
-      For each quote, give a brief explanation of why it's specifically relevant to the topic.
-      Format as JSON array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
-
-      // Build the exact message sent to GPT
-      const userContent = `${prompt}\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
-
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content: "You are a quote analysis assistant. Return only valid JSON with exact quotes from the provided text. Be inclusive and find as many relevant quotes as possible."
-          },
-          {
-            role: "user",
-            content: userContent
-          }
-        ],
-        temperature: 0.1
-      });
-
-
-      let analyzedQuotes = [];
-      try {
-        let rawContent = completion.choices[0].message.content;
-        
-        // Strip markdown code blocks if present
-        if (rawContent.includes('```json')) {
-          rawContent = rawContent.replace(/```json\s*/, '').replace(/```\s*$/, '');
-        } else if (rawContent.includes('```')) {
-          rawContent = rawContent.replace(/```\s*/, '').replace(/```\s*$/, '');
-        }
-        
-        analyzedQuotes = JSON.parse(rawContent);
-        // Ensure each quote has a relevance field
-        analyzedQuotes = analyzedQuotes.map((item, index) => ({
-          quote: item.quote || item,
-          relevance: item.relevance || `AI-analyzed quote #${index + 1}`
-        }));
-        
-      } catch (e) {
-        console.error('JSON parsing failed (fallback):', e.message);
-        console.error('Raw content:', completion.choices[0].message.content);
-        // Fallback to original quotes if JSON parsing fails
-        analyzedQuotes = relevantQuotes.map((quote, index) => ({
-          quote: quote,
-          relevance: `Selected based on topic relevance and text analysis (fallback #${index + 1})`
-        }));
-        
-      }
-
-      return res.json({
-        quotes: analyzedQuotes,
-        pageTitle: pageTitle || 'Current Page',
-        pageUrl: pageUrl || 'Unknown URL'
-      });
     }
 
-    // Select top sentences ensuring diversity and include neighbors for context
+    // Select all filtered sentences and include neighbors for context
     const picked = [];
     const usedIdx = new Set();
     for (const entry of filtered) {
-      if (picked.length >= maxSegments) break;
       if (usedIdx.has(entry.idx)) continue;
       // Add the sentence
       picked.push(entry.idx);
@@ -252,17 +184,15 @@ app.post('/api/find-quotes', async (req, res) => {
       // Optionally add a neighbor sentence to preserve quote boundaries
       const before = entry.idx - 1;
       const after = entry.idx + 1;
-      if (picked.length < maxSegments && before >= 0 && !usedIdx.has(before)) {
+      if (before >= 0 && !usedIdx.has(before)) {
         usedIdx.add(before);
         picked.push(before);
       }
-      if (picked.length < maxSegments && after < sentences.length && !usedIdx.has(after)) {
+      if (after < sentences.length && !usedIdx.has(after)) {
         usedIdx.add(after);
         picked.push(after);
       }
     }
-
-    // No blind fallback; if little content, we proceed with what we have
 
     // Sort indices to keep natural reading order, then map to text
     picked.sort((a, b) => a - b);
@@ -271,35 +201,31 @@ app.post('/api/find-quotes', async (req, res) => {
       return res.json({ quotes: [], message: 'No relevant quotes found' });
     }
 
-    // Use GPT to analyze and refine quotes
-    const prompt = `Analyze these text segments and find quotes that are HIGHLY SPECIFIC to the topic: "${topic}". 
-    Only select quotes that directly mention or discuss the specific topic keywords.
-    Do NOT include general quotes about the broader subject area unless they specifically mention the topic keywords.
-    Be very selective - it's better to return fewer quotes that are highly relevant than many quotes that are only tangentially related.
-    Preserve the original wording exactly. 
-    For each quote, give a brief explanation of why it's specifically relevant to the topic.
-    Format as JSON array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
+    // Use GPT to analyze and refine quotes (single call)
+    const systemPrompt = `You are a quote analysis assistant. Your task is to:
+    - Find quotes that are HIGHLY SPECIFIC to the topic provided by the user
+    - Only select quotes that directly mention or discuss the specific topic keywords
+    - Do NOT include general quotes about the broader subject area unless they specifically mention the topic keywords
+    - Preserve the original wording exactly as it appears in the text
+    - For each quote, provide a brief explanation of why it's specifically relevant to the topic
+    - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
 
-    // Build the exact message sent to GPT
-    const userContent = `${prompt}\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
-
- 
+    const userContent = `Topic: "${topic}"\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4.1-nano",
       messages: [
         {
           role: "system",
-          content: "You are a quote analysis assistant. Return only valid JSON with exact quotes from the provided text."
+          content: systemPrompt
         },
         {
           role: "user",
           content: userContent
         }
       ],
-      temperature: 0.1
+      temperature: 0.1  
     });
-
 
     let analyzedQuotes = [];
     try {
@@ -325,9 +251,8 @@ app.post('/api/find-quotes', async (req, res) => {
       // Fallback to original quotes if JSON parsing fails
       analyzedQuotes = relevantQuotes.map((quote, index) => ({
         quote: quote,
-        relevance: `Selected based on topic relevance and text analysis (fallback #${index + 1})`
+        relevance: `Selected based on topic relevance and text analysis #${index + 1}`
       }));
-      
     }
 
     res.json({
