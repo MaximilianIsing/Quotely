@@ -29,36 +29,15 @@ app.use(express.json({ limit: '3mb' }));
 const STORAGE_ROOT = process.env.STORAGE_DIR || path.join(__dirname, '..', 'storage');
 const LOG_DIR = path.join(STORAGE_ROOT, 'logs');
 const LOG_FILE = path.join(LOG_DIR, 'requests.csv');
-
-console.log('=== CSV Logging Initialization ===');
-console.log('STORAGE_DIR env:', process.env.STORAGE_DIR);
-console.log('STORAGE_ROOT:', STORAGE_ROOT);
-console.log('LOG_DIR:', LOG_DIR);
-console.log('LOG_FILE:', LOG_FILE);
-
 try {
   if (!fs.existsSync(LOG_DIR)) {
-    console.log('Log directory does not exist, creating:', LOG_DIR);
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    console.log('Log directory created successfully');
-  } else {
-    console.log('Log directory already exists');
   }
-  
   if (!fs.existsSync(LOG_FILE)) {
-    console.log('Log file does not exist, creating:', LOG_FILE);
     fs.writeFileSync(LOG_FILE, 'timestamp,topic,page_title,page_url\n', 'utf8');
-    console.log('Log file created successfully');
-  } else {
-    console.log('Log file already exists');
-    const stats = fs.statSync(LOG_FILE);
-    console.log('Log file size:', stats.size, 'bytes');
   }
-  console.log('=== CSV Logging Ready ===');
 } catch (e) {
-  console.error('!!! Failed to initialize logging !!!');
-  console.error('Error:', e.message);
-  console.error('Stack:', e.stack);
+  console.error('Failed to initialize logging:', e);
 }
 
 function csvEscape(value) {
@@ -71,30 +50,17 @@ function csvEscape(value) {
 
 function logPromptToCsv(topic, pageTitle, pageUrl) {
   try {
-    console.log('[CSV] Logging request - Topic:', topic?.substring(0, 50));
-    
     const row = [
       new Date().toISOString(),
       csvEscape(topic),
       csvEscape(pageTitle || 'Current Page'),
       csvEscape(pageUrl || 'Unknown URL')
     ].join(',') + '\n';
-    
-    console.log('[CSV] Writing to:', LOG_FILE);
-    console.log('[CSV] Row length:', row.length, 'chars');
-    
     fs.appendFile(LOG_FILE, row, (err) => {
-      if (err) {
-        console.error('[CSV] Failed to write log row:', err.message);
-        console.error('[CSV] Error code:', err.code);
-        console.error('[CSV] Error path:', err.path);
-      } else {
-        console.log('[CSV] Successfully logged to CSV');
-      }
+      if (err) console.error('Failed to write log row:', err);
     });
   } catch (e) {
-    console.error('[CSV] Error in logPromptToCsv:', e.message);
-    console.error('[CSV] Stack:', e.stack);
+    console.error('Error logging prompt:', e);
   }
 }
 
@@ -112,8 +78,9 @@ app.post('/api/find-quotes', async (req, res) => {
     const MAX_CHARS = 50000;
     const rawContent = String(pageContent || '').slice(0, MAX_CHARS);
 
+    // Log character count
+
     // Log the incoming prompt
-    console.log('[API] /api/find-quotes called - Topic:', topic?.substring(0, 50));
     logPromptToCsv(topic, pageTitle, pageUrl);
 
     // Normalize content: handle plain text or HTML gracefully
