@@ -7,9 +7,11 @@ class QuotelyPopup {
         this.storageKey = 'quotely_last_session';
         this.citationsKey = 'quotely_citations';
         this.quotesKey = 'quotely_quotes'; // Unified quote list with citation state
+        this.segmentStateKey = 'quotely_segment_state'; // State for pending segment selection
         this.initializeElements();
         this.attachEventListeners();
         this.restoreLastSession();
+        this.checkPendingSegmentSelection();
         
         // Also try to restore pins after a short delay in case session restoration didn't work
 
@@ -23,6 +25,7 @@ class QuotelyPopup {
         this.errorMessage = document.getElementById('error-message');
         this.citationFormat = document.getElementById('citation-format');
         this.btnText = this.findQuotesBtn.querySelector('.btn-text');
+        this.searchIcon = this.findQuotesBtn.querySelector('.search-icon');
         this.loadingSpinner = this.findQuotesBtn.querySelector('.loading-spinner');
     }
 
@@ -65,12 +68,15 @@ class QuotelyPopup {
             return;
         }
 
+        // Clear any pending segment selection state when starting a new search
+        localStorage.removeItem(this.segmentStateKey);
+
         // Clear current page quotes when starting a new search (but keep pins)
         this.clearCurrentPageQuotes();
 
         // Collapse the container when starting a new search
         const container = document.querySelector('.container');
-        container.classList.remove('expanded', 'medium-expanded');
+        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
 
         this.setLoading(true);
         this.hideError();
@@ -80,27 +86,257 @@ class QuotelyPopup {
             // Get current tab information
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             
-            // Inject function into the page to extract content
-            const results = await chrome.scripting.executeScript({
+            // Check if this is a PDF page
+            const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
+            
+            let pageData;
+            
+            if (isPDF) {
+                // For PDFs, send the URL to server for pdf-parse processing
+                console.log('PDF detected, sending to server for pdf-parse extraction...');
+                try {
+                    const pdfResponse = await fetch(`${this.serverUrl}/api/extract-pdf`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            url: tab.url,
+                            title: tab.title
+                        })
+                    });
+                    
+                    if (pdfResponse.ok) {
+                        pageData = await pdfResponse.json();
+                        
+                        console.log('=== PDF EXTRACTION ===');
+                        
+                        // Check if PDF requires segmentation
+                        if (pageData.requiresSegmentation) {
+                            console.log('PDF requires segmentation, total length:', pageData.totalLength, 'characters');
+                            console.log('Number of segments:', pageData.segmentCount);
+                            
+                            // Temporarily stop loading to show segment selector
+                            this.setLoading(false);
+                            
+                            // Show segment selection UI for PDF
+                            const selectedSegmentIndex = await this.showPdfSegmentSelector(pageData, tab.url);
+                            if (selectedSegmentIndex === null) {
+                                // User cancelled (shouldn't happen as we removed cancel button, but just in case)
+                                return;
+                            }
+                            
+                            console.log('Requesting PDF segment', selectedSegmentIndex);
+                            
+                            // Request the specific segment from server
+                            const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    pdfUrl: tab.url,
+                                    segmentIndex: selectedSegmentIndex
+                                })
+                            });
+                            
+                            if (!segmentResponse.ok) {
+                                throw new Error(`Segment retrieval failed: ${segmentResponse.status}`);
+                            }
+                            
+                            const segmentData = await segmentResponse.json();
+                            console.log('Received segment, length:', segmentData.content.length, 'characters');
+                            
+                            // Set pageData with the segment content
+                            pageData = {
+                                content: segmentData.content,
+                                title: pageData.title,
+                                url: pageData.url
+                            };
+                            
+                            // Resume loading for quote finding
+                            this.setLoading(true);
+                        } else {
+                            console.log('Extracted PDF content length:', (pageData.content || '').length, 'characters');
+                        }
+                    } else {
+                        throw new Error(`PDF extraction failed: ${pdfResponse.status}`);
+                    }
+                } catch (error) {
+                    console.error('PDF extraction error:', error);
+                    
+                    // Check if it's a scanned PDF error response
+                    if (pageData.error === 'scanned_pdf_too_large' && pageData.message) {
+                        this.showError(pageData.message);
+                    } else {
+                        this.showError('This PDF page is protected. Download this pdf locally then try again.');
+                    }
+                    return;
+                }
+                
+                // Check if PDF exceeded 30-page limit (no content extracted)
+                if (pageData && pageData.error === 'scanned_pdf_too_large') {
+                    this.setLoading(false);
+                    this.showError('This PDF requires scanning but exceeds the 30-page limit for OCR processing.');
+                    return;
+                }
+            } else {
+                // For HTML pages, use the existing extraction
+                const results = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                func: () => ({
-                    content: document && document.body ? document.body.innerText : (document && document.documentElement ? document.documentElement.textContent : null),
-                    url: window && window.location ? window.location.href : null,
-                    title: document ? document.title : null
-                })
+                func: () => {
+                    // Beautiful Soup-like content extraction
+                    function extractMainContent() {
+                        // Get the full HTML
+                        const html = document.documentElement.outerHTML;
+                        
+                        // Create a new DOMParser to parse the HTML
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        
+                        // Remove unwanted elements (like Beautiful Soup's decompose())
+                        const unwantedSelectors = [
+                            'script', 'style', 'noscript', 'iframe', 'embed', 'object',
+                            'nav', 'header', 'footer', 'aside', 'menu', 'sidebar',
+                            '.nav', '.navbar', '.menu', '.sidebar', '.footer', '.header',
+                            '.navigation', '.breadcrumb', '.pagination', '.ads', '.advertisement',
+                            '.social', '.share', '.comments', '.related', '.recommended',
+                            '.cookie-banner', '.popup', '.modal', '.overlay'
+                        ];
+                        
+                        unwantedSelectors.forEach(selector => {
+                            const elements = doc.querySelectorAll(selector);
+                            elements.forEach(el => el.remove());
+                        });
+                        
+                        // Find the main content using multiple strategies
+                        const contentSelectors = [
+                            'main', 'article', '[role="main"]',
+                            '.content', '#content', '.main-content', '.article-content',
+                            '.post-content', '.entry-content', '.document-content',
+                            '.page-content', '.text-content', '.blog-content', '.post-body',
+                            '.single-post', '.post', '.entry', '.story'
+                        ];
+                        
+                        let mainContent = null;
+                        
+                        // Strategy 1: Find by semantic selectors
+                        for (const selector of contentSelectors) {
+                            const element = doc.querySelector(selector);
+                            if (element && element.textContent.trim().length > 500) {
+                                mainContent = element;
+                                break;
+                            }
+                        }
+                        
+                        // Strategy 2: Find by content density (like Beautiful Soup's content scoring)
+                        if (!mainContent) {
+                            const body = doc.body;
+                            if (body) {
+                                const allDivs = body.querySelectorAll('div, section, p');
+                                let bestCandidate = null;
+                                let maxScore = 0;
+                                
+                                allDivs.forEach(el => {
+                                    const text = el.textContent.trim();
+                                    const textLength = text.length;
+                                
+                                    // Skip if too short or too long
+                                    if (textLength < 200 || textLength > 100000) return;
+                                    
+                                    // Calculate content score (like Beautiful Soup)
+                                    const links = el.querySelectorAll('a').length;
+                                    const paragraphs = el.querySelectorAll('p').length;
+                                    const images = el.querySelectorAll('img').length;
+                                    
+                                    // Higher score for more paragraphs and fewer links/images
+                                    const score = paragraphs * 3 - links - images * 2 + (textLength / 100);
+                                    
+                                    if (score > maxScore) {
+                                        maxScore = score;
+                                        bestCandidate = el;
+                                    }
+                                });
+                                
+                                if (bestCandidate) {
+                                    mainContent = bestCandidate;
+                                }
+                            }
+                        }
+                        
+                        // Strategy 3: Fallback to body
+                        if (!mainContent) {
+                            mainContent = doc.body || doc.documentElement;
+                        }
+                        
+                        // Extract clean text
+                        let content = mainContent ? mainContent.textContent : '';
+                        
+                        // Clean up the content
+                        content = content
+                            .replace(/\s+/g, ' ') // Normalize whitespace
+                            .replace(/^\s+|\s+$/g, '') // Trim
+                            .replace(/[^\w\s.,!?;:'"()-]/g, '') // Remove special chars but keep punctuation
+                            .trim();
+                        
+                        return content;
+                    }
+                    
+                    const content = extractMainContent();
+                    
+                    return {
+                        content: content,
+                        url: window.location.href,
+                        title: document.title
+                    };
+                }
             }).catch(() => []);
 
-            if (!results || results.length === 0 || !results[0] || !results[0].result || !results[0].result.content) {
-                this.showError('Cannot access this page content (restricted page like chrome:// or extension page). Try another tab.');
-                return;
-            }
+                if (!results || results.length === 0 || !results[0] || !results[0].result || !results[0].result.content) {
+                    this.showError('Cannot access this page content. Try another tab.');
+                    return;
+                }
 
-            const pageData = results[0].result;
+                pageData = results[0].result;
+                console.log('=== HTML PAGE EXTRACTION ===');
+                console.log('Extracted HTML content length:', (pageData.content || '').length, 'characters');
+            }
+            
             this.lastPageTitle = pageData.title || 'Current Page';
             this.lastPageUrl = pageData.url || 'Unknown URL';
             
-            // Enforce 50k character limit client-side
+            // Check if content is very large (> 50,000 characters) - for both PDF and HTML
+            if (pageData.content && pageData.content.length > 50000) {
+                console.log('Content is very large, showing segment selector...');
+                
+                // Temporarily stop loading to show segment selector
+                this.setLoading(false);
+                
+                // Show segment selection UI
+                const selectedSegment = await this.showSegmentSelector(pageData.content);
+                if (selectedSegment === null) {
+                    // User cancelled
+                    console.log('User cancelled segment selection');
+                    return;
+                }
+                
+                console.log('Selected segment length:', selectedSegment.length, 'characters');
+                
+                // Replace content with selected segment
+                pageData.content = selectedSegment;
+                
+                // Resume loading for quote finding
+                this.setLoading(true);
+            }
+            
+            // Log content length before sending
+            console.log('=== FIND QUOTES: Content Length Check ===');
+            console.log('Content length to send:', (pageData.content || '').length, 'characters');
+            
+            // Enforce 50k character limit client-side (safety check)
             const limitedContent = (pageData.content || '').slice(0, 50000);
+            
+            console.log('Final content length (sending to server):', limitedContent.length, 'characters');
 
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
@@ -142,10 +378,202 @@ class QuotelyPopup {
         }
     }
 
+    async showPdfSegmentSelector(pdfData, pdfUrl = null) {
+        // Save PDF segment selection state
+        const segmentState = {
+            isPdf: true,
+            pdfData: pdfData,
+            pdfUrl: pdfUrl,
+            topic: this.topicInput.value,
+            pageTitle: this.lastPageTitle || pdfData.title,
+            pageUrl: this.lastPageUrl || pdfUrl,
+            timestamp: Date.now()
+        };
+        localStorage.setItem(this.segmentStateKey, JSON.stringify(segmentState));
+
+        return new Promise((resolve) => {
+            console.log('Showing PDF segment selector with', pdfData.segmentCount, 'segments');
+
+            // Hide the current results/error sections
+            this.hideResults();
+            this.hideError();
+
+            // Hide the results header (Found Quotes and Citation Format)
+            const resultsHeader = document.querySelector('.results-header');
+            if (resultsHeader) {
+                resultsHeader.style.display = 'none';
+            }
+
+            // Create segment selector UI
+            const selectorHTML = `
+                <div class="segment-container">
+                    <div class="segment-selector">
+                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(pdfData.totalLength / 1000)}k characters)</p>
+                        <p style="margin-top: 0; margin-bottom: 8px;">Select a segment to scan:</p>
+                        <div class="segments-list">
+                            ${this.createSegmentRows(pdfData.segments)}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            this.quotesContainer.innerHTML = selectorHTML;
+            this.resultsSection.style.display = 'block';
+
+            // Expand container to show segments
+            const container = document.querySelector('.container');
+            container.classList.add('segment-expanded');
+
+            // Add event listeners with slight delay to ensure DOM is ready
+            setTimeout(() => {
+                const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
+
+                console.log('Found', segmentButtons.length, 'PDF segment buttons');
+
+                segmentButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const index = parseInt(btn.dataset.index);
+                        console.log('Selected PDF segment', index + 1);
+                        
+                        // Clear segment selection state
+                        localStorage.removeItem(this.segmentStateKey);
+                        
+                        // Collapse container and hide segment selector
+                        const container = document.querySelector('.container');
+                        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
+                        this.hideResults();
+                        
+                        // Resolve with the selected segment index
+                        resolve(index);
+                    });
+                });
+            }, 100);
+        });
+    }
+
+    createSegmentRows(segments) {
+        const rows = [];
+        for (let i = 0; i < segments.length; i += 5) {
+            const rowSegments = segments.slice(i, i + 5);
+            const rowHTML = `
+                <div class="segment-row">
+                    ${rowSegments.map(seg => `
+                        <button class="segment-option" data-index="${seg.index}" title="Characters ${seg.start.toLocaleString()} - ${seg.end.toLocaleString()}">
+                            ${seg.index + 1}
+                        </button>
+                    `).join('')}
+                </div>
+            `;
+            rows.push(rowHTML);
+        }
+        return rows.join('');
+    }
+
+    async showSegmentSelector(fullText, topic = null) {
+        // Save segment selection state
+        const segmentState = {
+            fullText: fullText,
+            topic: topic || this.topicInput.value,
+            pageTitle: this.lastPageTitle,
+            pageUrl: this.lastPageUrl,
+            timestamp: Date.now()
+        };
+        localStorage.setItem(this.segmentStateKey, JSON.stringify(segmentState));
+
+        return new Promise((resolve) => {
+            // Create segments
+            const SEGMENT_SIZE = 50000;
+            const segments = [];
+            for (let i = 0; i < fullText.length; i += SEGMENT_SIZE) {
+                const segmentText = fullText.substring(i, Math.min(i + SEGMENT_SIZE, fullText.length));
+                // Escape HTML characters in preview
+                const preview = this.escapeHtml(segmentText.substring(0, 150).trim()) + '...';
+                segments.push({
+                    index: segments.length,
+                    start: i,
+                    end: Math.min(i + SEGMENT_SIZE, fullText.length),
+                    preview: preview
+                });
+            }
+
+            console.log('Showing segment selector with', segments.length, 'segments');
+
+            // Hide the current results/error sections
+            this.hideResults();
+            this.hideError();
+
+            // Hide the results header (Found Quotes and Citation Format)
+            const resultsHeader = document.querySelector('.results-header');
+            if (resultsHeader) {
+                resultsHeader.style.display = 'none';
+            }
+
+            // Create segment selector UI
+            const selectorHTML = `
+                <div class="segment-container">
+                    <div class="segment-selector">
+                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(fullText.length / 1000)}k characters)</p>
+                        <p style="margin-top: 0; margin-bottom: 8px;">Select a segment to scan:</p>
+                        <div class="segments-list">
+                            ${this.createSegmentRows(segments)}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            this.quotesContainer.innerHTML = selectorHTML;
+            this.resultsSection.style.display = 'block';
+
+            // Expand container to show segments
+            const container = document.querySelector('.container');
+            container.classList.add('segment-expanded');
+
+            // Add event listeners with slight delay to ensure DOM is ready
+            setTimeout(() => {
+                const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
+
+                console.log('Found', segmentButtons.length, 'segment buttons');
+
+                segmentButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const index = parseInt(btn.dataset.index);
+                        const start = index * SEGMENT_SIZE;
+                        const end = Math.min(start + SEGMENT_SIZE, fullText.length);
+                        const selectedSegment = fullText.substring(start, end);
+                        console.log('Selected segment', index + 1);
+                        
+                        // Clear segment selection state
+                        localStorage.removeItem(this.segmentStateKey);
+                        
+                        // Collapse container and hide segment selector
+                        const container = document.querySelector('.container');
+                        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
+                        this.hideResults();
+                        
+                        // Resolve with the selected segment
+                        resolve(selectedSegment);
+                    });
+                });
+            }, 100);
+        });
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     // extractPageContent removed; using inline function via chrome.scripting.executeScript
 
     displayQuotes(quotes, pageTitle, pageUrl) {
         this.quotesContainer.innerHTML = '';
+        
+        // Show the results header (Found Quotes and Citation Format)
+        const resultsHeader = document.querySelector('.results-header');
+        if (resultsHeader) {
+            resultsHeader.style.display = '';
+        }
         
         // First, append any pinned quotes from other sites
         this.appendPinnedQuotesFromOtherSites();
@@ -405,6 +833,7 @@ class QuotelyPopup {
     setLoading(loading) {
         this.findQuotesBtn.disabled = loading;
         this.btnText.style.display = loading ? 'none' : 'block';
+        this.searchIcon.style.display = loading ? 'none' : 'block';
         this.loadingSpinner.style.display = loading ? 'block' : 'none';
     }
 
@@ -473,6 +902,139 @@ class QuotelyPopup {
             }
         } catch (error) {
             console.error('Failed to restore session:', error);
+        }
+    }
+
+    checkPendingSegmentSelection() {
+        try {
+            const segmentState = localStorage.getItem(this.segmentStateKey);
+            if (!segmentState) return;
+            
+            const state = JSON.parse(segmentState);
+            
+            // Only restore if less than 1 hour old (segment selection shouldn't persist too long)
+            if (Date.now() - state.timestamp > 60 * 60 * 1000) {
+                localStorage.removeItem(this.segmentStateKey);
+                return;
+            }
+            
+            // Restore topic and page info
+            if (state.topic) {
+                this.topicInput.value = state.topic;
+            }
+            if (state.pageTitle) {
+                this.lastPageTitle = state.pageTitle;
+            }
+            if (state.pageUrl) {
+                this.lastPageUrl = state.pageUrl;
+            }
+            
+            // Restore segment selector based on type
+            console.log('Restoring pending segment selection...');
+            
+            if (state.isPdf) {
+                // Restore PDF segment selector
+                console.log('Restoring PDF segment selector');
+                this.showPdfSegmentSelector(state.pdfData, state.pdfUrl).then(async selectedSegmentIndex => {
+                    if (selectedSegmentIndex !== null) {
+                        // Request the specific segment from server
+                        this.setLoading(true);
+                        try {
+                            const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    pdfUrl: state.pdfUrl,
+                                    segmentIndex: selectedSegmentIndex
+                                })
+                            });
+                            
+                            if (segmentResponse.ok) {
+                                const segmentData = await segmentResponse.json();
+                                this.continueWithSelectedSegment(segmentData.content, state.topic);
+                            } else {
+                                this.showError('Failed to retrieve PDF segment. Please try again.');
+                                this.setLoading(false);
+                            }
+                        } catch (error) {
+                            console.error('Error retrieving PDF segment:', error);
+                            this.showError('Failed to retrieve PDF segment. Please try again.');
+                            this.setLoading(false);
+                        }
+                    }
+                });
+            } else {
+                // Restore HTML segment selector
+                console.log('Restoring HTML segment selector');
+                this.showSegmentSelector(state.fullText, state.topic).then(selectedSegment => {
+                    if (selectedSegment) {
+                        // User selected a segment, continue with quote finding
+                        this.continueWithSelectedSegment(selectedSegment, state.topic);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Failed to restore segment selection:', error);
+            localStorage.removeItem(this.segmentStateKey);
+        }
+    }
+
+    async continueWithSelectedSegment(content, topic) {
+        try {
+            this.setLoading(true);
+            
+            // Create pageData object with the selected segment
+            const pageData = {
+                content: content,
+                title: this.lastPageTitle || 'Current Page',
+                url: this.lastPageUrl || window.location.href
+            };
+            
+            this.lastPageTitle = pageData.title;
+            this.lastPageUrl = pageData.url;
+            
+            console.log('=== FIND QUOTES: Content Length Check ===');
+            console.log('Content length to send:', content.length, 'characters');
+            
+            // Send to server for analysis
+            const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    topic: topic,
+                    pageContent: content,
+                    pageUrl: this.lastPageUrl,
+                    pageTitle: this.lastPageTitle
+                })
+            });
+
+            if (!response.ok) {
+                if (response.status === 413) {
+                    this.showError('The page is too large to analyze. Try a simpler page or select text and paste it instead.');
+                    return;
+                }
+                throw new Error(`Server error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data.quotes && data.quotes.length > 0) {
+                this.lastPageTitle = data.pageTitle || this.lastPageTitle;
+                this.lastPageUrl = data.pageUrl || this.lastPageUrl;
+                this.displayQuotes(data.quotes, this.lastPageTitle, this.lastPageUrl);
+            } else {
+                this.showError('No relevant quotes found. Try a different topic or check if the page has relevant content.');
+            }
+
+        } catch (error) {
+            console.error('Error finding quotes:', error);
+            this.showError('Failed to find quotes. The server might be offline. Please try again later.');
+        } finally {
+            this.setLoading(false);
         }
     }
 

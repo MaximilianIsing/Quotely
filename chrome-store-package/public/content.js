@@ -1,1 +1,108 @@
-!window.__QUOTELY_CONTENT_INIT__&&(window.__QUOTELY_CONTENT_INIT__=!0,window.quotelyContentScript=new class t{constructor(){this.highlightedElements=[],this.initializeContentScript()}initializeContentScript(){chrome.runtime.onMessage.addListener((t,e,n)=>{if("extractPageContent"===t.action)return this.extractPageContent().then(n),!0})}async extractPageContent(){try{let t=this.getMainContent();return{content:t,url:window.location.href,title:document.title,timestamp:new Date().toISOString()}}catch(e){return console.error("Error extracting page content:",e),{content:document.documentElement.outerHTML,url:window.location.href,title:document.title,error:e.message}}}getMainContent(){for(let t of["main","article",'[role="main"]',".content","#content",".main-content",".post-content",".entry-content"]){let e=document.querySelector(t);if(e&&e.textContent.trim().length>100)return e.outerHTML}return document.body.outerHTML}highlightQuote(t){this.removeHighlights();let e=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,!1),n;for(;n=e.nextNode();)if(n.textContent.includes(t)){let i=n.parentNode;if("SCRIPT"!==i.tagName&&"STYLE"!==i.tagName){let r=n.textContent.replace(RegExp(t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"gi"),'<mark class="quotely-highlight">$&</mark>');if(r!==n.textContent){let o=document.createElement("div");o.innerHTML=r,i.replaceChild(o,n),this.highlightedElements.push(o)}}}}removeHighlights(){this.highlightedElements.forEach(t=>{let e=t.parentNode;e&&(e.replaceChild(document.createTextNode(t.textContent),t),e.normalize())}),this.highlightedElements=[]}});
+// Quotely Content Script
+// Guard against multiple injections and avoid leaking global class names
+(function () {
+    if (window.__QUOTELY_CONTENT_INIT__) {
+        return; // Already initialized
+    }
+    window.__QUOTELY_CONTENT_INIT__ = true;
+
+    class ContentScriptController {
+        constructor() {
+            this.highlightedElements = [];
+            this.initializeContentScript();
+        }
+
+        initializeContentScript() {
+            chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+                if (request.action === 'extractPageContent') {
+                    this.extractPageContent().then(sendResponse);
+                    return true; // Keep the message channel open for async response
+                }
+            });
+        }
+
+        async extractPageContent() {
+            try {
+                const content = this.getMainContent();
+                return {
+                    content: content,
+                    url: window.location.href,
+                    title: document.title,
+                    timestamp: new Date().toISOString()
+                };
+            } catch (error) {
+                console.error('Error extracting page content:', error);
+                return {
+                    content: document.documentElement.outerHTML,
+                    url: window.location.href,
+                    title: document.title,
+                    error: error.message
+                };
+            }
+        }
+
+        getMainContent() {
+            const mainSelectors = [
+                'main',
+                'article',
+                '[role="main"]',
+                '.content',
+                '#content',
+                '.main-content',
+                '.post-content',
+                '.entry-content'
+            ];
+
+            for (const selector of mainSelectors) {
+                const element = document.querySelector(selector);
+                if (element && element.textContent.trim().length > 100) {
+                    return element.outerHTML;
+                }
+            }
+            return document.body.outerHTML;
+        }
+
+        highlightQuote(quoteText) {
+            this.removeHighlights();
+            const walker = document.createTreeWalker(
+                document.body,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+            );
+
+            let node;
+            while (node = walker.nextNode()) {
+                if (node.textContent.includes(quoteText)) {
+                    const parent = node.parentNode;
+                    if (parent.tagName !== 'SCRIPT' && parent.tagName !== 'STYLE') {
+                        const highlightedHTML = node.textContent.replace(
+                            new RegExp(quoteText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
+                            `<mark class="quotely-highlight">$&</mark>`
+                        );
+                        if (highlightedHTML !== node.textContent) {
+                            const wrapper = document.createElement('div');
+                            wrapper.innerHTML = highlightedHTML;
+                            parent.replaceChild(wrapper, node);
+                            this.highlightedElements.push(wrapper);
+                        }
+                    }
+                }
+            }
+        }
+
+        removeHighlights() {
+            this.highlightedElements.forEach(element => {
+                const parent = element.parentNode;
+                if (parent) {
+                    parent.replaceChild(document.createTextNode(element.textContent), element);
+                    parent.normalize();
+                }
+            });
+            this.highlightedElements = [];
+        }
+    }
+
+    // Expose a single instance if needed later
+    window.quotelyContentScript = new ContentScriptController();
+})();

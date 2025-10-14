@@ -1,1 +1,32 @@
-.quotely-highlight{background-color:#fef3c7;border:2px solid #f59e0b;border-radius:3px;padding:2px 4px;box-shadow:0 2px 4px rgba(245,158,11,.3);animation:.5s ease-in-out quotely-pulse}@keyframes quotely-pulse{0%,100%{background-color:#fef3c7;transform:scale(1)}50%{background-color:#fde68a;transform:scale(1.02)}}.quotely-highlight mark{background-color:inherit!important;border:inherit!important;box-shadow:inherit!important}
+/* Quotely Content Script Styles */
+
+.quotely-highlight {
+    background-color: #fef3c7;
+    border: 2px solid #f59e0b;
+    border-radius: 3px;
+    padding: 2px 4px;
+    box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3);
+    animation: quotely-pulse 0.5s ease-in-out;
+}
+
+@keyframes quotely-pulse {
+    0% {
+        background-color: #fef3c7;
+        transform: scale(1);
+    }
+    50% {
+        background-color: #fde68a;
+        transform: scale(1.02);
+    }
+    100% {
+        background-color: #fef3c7;
+        transform: scale(1);
+    }
+}
+
+/* Ensure highlights are visible */
+.quotely-highlight mark {
+    background-color: inherit !important;
+    border: inherit !important;
+    box-shadow: inherit !important;
+}

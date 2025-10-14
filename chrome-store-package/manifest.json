@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Quotely - AI Quote Finder",
-  "version": "1.01",
-  "description": "Save time hunting for quotes. Find relevant quotes instantly on any webpage using AI-powered fuzzy matching.",
+  "version": "1.0.0",
+  "description": "Find relevant quotes on any webpage using AI-powered fuzzy matching",
   "permissions": [
     "activeTab",
     "storage",
@@ -14,7 +14,7 @@
   ],
   "action": {
     "default_popup": "public/popup.html",
-    "default_title": "Quotely - Find Quotes Instantly",
+    "default_title": "Quotely - Find Quotes",
     "default_icon": {
       "16": "media/Logo32x32.png",
       "32": "media/Logo32x32.png",
