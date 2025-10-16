@@ -12,7 +12,24 @@ const getOpenAIKey = () => {
   }
 };
 
+// Get Google Cloud Vision credentials path
+const getGoogleCredentialsPath = () => {
+  // Check for GOOGLE_APPLICATION_CREDENTIALS environment variable first
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  }
+  
+  // Otherwise, look for google-credentials.json in the root directory
+  const credPath = path.join(__dirname, '../google-credentials.json');
+  if (fs.existsSync(credPath)) {
+    return credPath;
+  }
+  
+  return null;
+};
+
 module.exports = {
   OPENAI_API_KEY: getOpenAIKey(),
+  GOOGLE_CREDENTIALS_PATH: getGoogleCredentialsPath(),
   PORT: 3000
 };

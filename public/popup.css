@@ -32,7 +32,7 @@ body {
 }
 
 .container.segment-expanded {
-    height: 410px;
+    height: 365px;
 }
 
 .header {
@@ -603,6 +603,4 @@ body {
     border-color: #1d4ed8;
     background: #1d4ed8;
     color: white;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(37, 99, 235, 0.15);
 }

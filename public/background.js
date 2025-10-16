@@ -3,20 +3,11 @@
 
 chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {
-        console.log('Quotely extension installed');
-        
-        // Set up default storage values
         chrome.storage.sync.set({
             citationFormat: 'MLA',
-            serverUrl: 'https://quotely-rmgh.onrender.com' //https://quotely-rmgh.onrender.com
+            serverUrl: 'https://quotely-rmgh.onrender.com'
         });
     }
-});
-
-// Handle extension icon click
-chrome.action.onClicked.addListener((tab) => {
-    // This is handled by the popup, but we can add additional logic here if needed
-    console.log('Quotely extension clicked on tab:', tab.url);
 });
 
 // Handle messages from content scripts and popup

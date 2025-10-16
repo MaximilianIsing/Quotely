@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
+        this.serverUrl = 'https://quotely-rmgh.onrender.com';
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.storageKey = 'quotely_last_session';
@@ -93,7 +93,6 @@ class QuotelyPopup {
             
             if (isPDF) {
                 // For PDFs, send the URL to server for pdf-parse processing
-                console.log('PDF detected, sending to server for pdf-parse extraction...');
                 try {
                     const pdfResponse = await fetch(`${this.serverUrl}/api/extract-pdf`, {
                         method: 'POST',
@@ -108,14 +107,8 @@ class QuotelyPopup {
                     
                     if (pdfResponse.ok) {
                         pageData = await pdfResponse.json();
-                        
-                        console.log('=== PDF EXTRACTION ===');
-                        
                         // Check if PDF requires segmentation
                         if (pageData.requiresSegmentation) {
-                            console.log('PDF requires segmentation, total length:', pageData.totalLength, 'characters');
-                            console.log('Number of segments:', pageData.segmentCount);
-                            
                             // Temporarily stop loading to show segment selector
                             this.setLoading(false);
                             
@@ -125,8 +118,6 @@ class QuotelyPopup {
                                 // User cancelled (shouldn't happen as we removed cancel button, but just in case)
                                 return;
                             }
-                            
-                            console.log('Requesting PDF segment', selectedSegmentIndex);
                             
                             // Request the specific segment from server
                             const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
@@ -145,7 +136,6 @@ class QuotelyPopup {
                             }
                             
                             const segmentData = await segmentResponse.json();
-                            console.log('Received segment, length:', segmentData.content.length, 'characters');
                             
                             // Set pageData with the segment content
                             pageData = {
@@ -156,8 +146,6 @@ class QuotelyPopup {
                             
                             // Resume loading for quote finding
                             this.setLoading(true);
-                        } else {
-                            console.log('Extracted PDF content length:', (pageData.content || '').length, 'characters');
                         }
                     } else {
                         throw new Error(`PDF extraction failed: ${pdfResponse.status}`);
@@ -298,8 +286,7 @@ class QuotelyPopup {
                 }
 
                 pageData = results[0].result;
-                console.log('=== HTML PAGE EXTRACTION ===');
-                console.log('Extracted HTML content length:', (pageData.content || '').length, 'characters');
+
             }
             
             this.lastPageTitle = pageData.title || 'Current Page';
@@ -307,7 +294,7 @@ class QuotelyPopup {
             
             // Check if content is very large (> 50,000 characters) - for both PDF and HTML
             if (pageData.content && pageData.content.length > 50000) {
-                console.log('Content is very large, showing segment selector...');
+
                 
                 // Temporarily stop loading to show segment selector
                 this.setLoading(false);
@@ -316,11 +303,10 @@ class QuotelyPopup {
                 const selectedSegment = await this.showSegmentSelector(pageData.content);
                 if (selectedSegment === null) {
                     // User cancelled
-                    console.log('User cancelled segment selection');
+
                     return;
                 }
                 
-                console.log('Selected segment length:', selectedSegment.length, 'characters');
                 
                 // Replace content with selected segment
                 pageData.content = selectedSegment;
@@ -330,13 +316,11 @@ class QuotelyPopup {
             }
             
             // Log content length before sending
-            console.log('=== FIND QUOTES: Content Length Check ===');
-            console.log('Content length to send:', (pageData.content || '').length, 'characters');
+
             
             // Enforce 50k character limit client-side (safety check)
             const limitedContent = (pageData.content || '').slice(0, 50000);
             
-            console.log('Final content length (sending to server):', limitedContent.length, 'characters');
 
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
@@ -348,7 +332,8 @@ class QuotelyPopup {
                     topic: topic,
                     pageContent: limitedContent,
                     pageUrl: this.lastPageUrl,
-                    pageTitle: this.lastPageTitle
+                    pageTitle: this.lastPageTitle,
+                    isOCR: pageData.isOCR || false
                 })
             });
 
@@ -392,7 +377,6 @@ class QuotelyPopup {
         localStorage.setItem(this.segmentStateKey, JSON.stringify(segmentState));
 
         return new Promise((resolve) => {
-            console.log('Showing PDF segment selector with', pdfData.segmentCount, 'segments');
 
             // Hide the current results/error sections
             this.hideResults();
@@ -428,13 +412,10 @@ class QuotelyPopup {
             setTimeout(() => {
                 const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
 
-                console.log('Found', segmentButtons.length, 'PDF segment buttons');
-
                 segmentButtons.forEach(btn => {
                     btn.addEventListener('click', () => {
                         const index = parseInt(btn.dataset.index);
-                        console.log('Selected PDF segment', index + 1);
-                        
+      
                         // Clear segment selection state
                         localStorage.removeItem(this.segmentStateKey);
                         
@@ -496,8 +477,6 @@ class QuotelyPopup {
                 });
             }
 
-            console.log('Showing segment selector with', segments.length, 'segments');
-
             // Hide the current results/error sections
             this.hideResults();
             this.hideError();
@@ -532,16 +511,13 @@ class QuotelyPopup {
             setTimeout(() => {
                 const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
 
-                console.log('Found', segmentButtons.length, 'segment buttons');
-
                 segmentButtons.forEach(btn => {
                     btn.addEventListener('click', () => {
                         const index = parseInt(btn.dataset.index);
                         const start = index * SEGMENT_SIZE;
                         const end = Math.min(start + SEGMENT_SIZE, fullText.length);
                         const selectedSegment = fullText.substring(start, end);
-                        console.log('Selected segment', index + 1);
-                        
+
                         // Clear segment selection state
                         localStorage.removeItem(this.segmentStateKey);
                         
@@ -930,11 +906,9 @@ class QuotelyPopup {
             }
             
             // Restore segment selector based on type
-            console.log('Restoring pending segment selection...');
             
             if (state.isPdf) {
                 // Restore PDF segment selector
-                console.log('Restoring PDF segment selector');
                 this.showPdfSegmentSelector(state.pdfData, state.pdfUrl).then(async selectedSegmentIndex => {
                     if (selectedSegmentIndex !== null) {
                         // Request the specific segment from server
@@ -967,7 +941,6 @@ class QuotelyPopup {
                 });
             } else {
                 // Restore HTML segment selector
-                console.log('Restoring HTML segment selector');
                 this.showSegmentSelector(state.fullText, state.topic).then(selectedSegment => {
                     if (selectedSegment) {
                         // User selected a segment, continue with quote finding
@@ -995,9 +968,6 @@ class QuotelyPopup {
             this.lastPageTitle = pageData.title;
             this.lastPageUrl = pageData.url;
             
-            console.log('=== FIND QUOTES: Content Length Check ===');
-            console.log('Content length to send:', content.length, 'characters');
-            
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
                 method: 'POST',
@@ -1008,7 +978,8 @@ class QuotelyPopup {
                     topic: topic,
                     pageContent: content,
                     pageUrl: this.lastPageUrl,
-                    pageTitle: this.lastPageTitle
+                    pageTitle: this.lastPageTitle,
+                    isOCR: false // Segments are from regular extraction, not OCR
                 })
             });
 

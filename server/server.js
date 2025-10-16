@@ -12,42 +12,65 @@ const { generateCitation } = require('./citation-generator');
 // For PDF processing
 let PDFParser;
 try {
-    console.log('Attempting to load pdf2json...');
     PDFParser = require('pdf2json');
-    console.log('pdf2json loaded successfully:', typeof PDFParser);
 } catch (error) {
-    console.log('pdf2json not installed. PDF processing will not be available.');
-    console.log('Error details:', error.message);
+    console.error('PDF processing not available:', error.message);
 }
 
-// For OCR processing (scanned PDFs)
-let pdfPoppler, Tesseract;
+// For OCR processing (scanned PDFs) using Google Cloud Vision
+let vision, visionClient;
 try {
-    console.log('Attempting to load OCR libraries...');
-    pdfPoppler = require('pdf-poppler');
-    Tesseract = require('tesseract.js');
-    console.log('OCR libraries loaded successfully');
+    vision = require('@google-cloud/vision');
+    
+    // Initialize Vision client with credentials
+    if (config.GOOGLE_CREDENTIALS_PATH) {
+        visionClient = new vision.ImageAnnotatorClient({
+            keyFilename: config.GOOGLE_CREDENTIALS_PATH
+        });
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        visionClient = new vision.ImageAnnotatorClient();
+    } else {
+        console.error('⚠️  Google Cloud Vision credentials not found. OCR will not be available.');
+    }
 } catch (error) {
-    console.log('OCR libraries not installed. Scanned PDF processing will not be available.');
-    console.log('Error details:', error.message);
+    console.error('Google Cloud Vision not available:', error.message);
 }
 
-// Temporary cache for extracted PDF content (expires after 1 hour)
+// Temporary cache for extracted PDF content (expires after 5 minutes)
 const pdfCache = new Map();
-const PDF_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+const PDF_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 15; // Maximum number of cached PDFs
 
-function cachePdfContent(url, content) {
-    pdfCache.set(url, {
-        content: content,
-        timestamp: Date.now()
-    });
-    
-    // Clean up expired entries
+function cachePdfContent(url, content, isOCR = false) {
+    // Clean up expired entries first
     for (const [key, value] of pdfCache.entries()) {
         if (Date.now() - value.timestamp > PDF_CACHE_DURATION) {
             pdfCache.delete(key);
         }
     }
+    
+    // If cache is at max size and this is a new entry, remove oldest
+    if (pdfCache.size >= MAX_CACHE_SIZE && !pdfCache.has(url)) {
+        let oldestKey = null;
+        let oldestTime = Date.now();
+        
+        for (const [key, value] of pdfCache.entries()) {
+            if (value.timestamp < oldestTime) {
+                oldestTime = value.timestamp;
+                oldestKey = key;
+            }
+        }
+        
+        if (oldestKey) {
+            pdfCache.delete(oldestKey);
+        }
+    }
+    
+    pdfCache.set(url, {
+        content: content,
+        isOCR: isOCR,
+        timestamp: Date.now()
+    });
 }
 
 function getCachedPdfContent(url) {
@@ -60,83 +83,86 @@ function getCachedPdfContent(url) {
         return null;
     }
     
-    return cached.content;
+    // Update timestamp for LRU (Least Recently Used)
+    cached.timestamp = Date.now();
+    pdfCache.set(url, cached);
+    
+    return cached; // Return full cached object with content and isOCR flag
 }
 
 /**
- * Extract text from PDF using OCR (for scanned PDFs)
- * @param {string} pdfPath - Path to the PDF file
+ * Extract text from PDF using Google Cloud Vision OCR (for scanned PDFs)
+ * @param {Buffer} pdfBuffer - PDF file buffer
+ * @param {number} totalPages - Total number of pages in the PDF
  * @returns {Promise<{text: string, pageCount: number}>} Extracted text and page count
  */
-async function extractPDFTextOCR(pdfPath) {
-    const tempDir = path.join(__dirname, '..', 'scanning', 'temp');
-    if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
+async function extractPDFTextOCR(pdfBuffer, totalPages) {
+    if (!visionClient) {
+        throw new Error('Google Cloud Vision is not configured. Please set up credentials.');
     }
     
-    // Convert PDF to images with lower quality for speed
-    const options = {
-        format: 'png',
-        out_dir: tempDir,
-        out_prefix: 'page',
-        page: null,
-        density: 200  // Lower density = faster
-    };
+    const base64Pdf = pdfBuffer.toString('base64');
     
-    console.log('Converting PDF to images for OCR...');
-    await pdfPoppler.convert(pdfPath, options);
+    // Google Cloud Vision has a 5-page limit per request
+    // Break pages into chunks of 5 and process in parallel
+    const PAGES_PER_REQUEST = 5;
+    const chunks = [];
     
-    // Get list of generated image files
-    const files = fs.readdirSync(tempDir)
-        .filter(file => file.startsWith('page') && file.endsWith('.png'))
-        .sort();
+    for (let i = 1; i <= totalPages; i += PAGES_PER_REQUEST) {
+        const endPage = Math.min(i + PAGES_PER_REQUEST - 1, totalPages);
+        const pageRange = [];
+        for (let p = i; p <= endPage; p++) {
+            pageRange.push(p);
+        }
+        chunks.push(pageRange);
+    }
     
-    console.log(`Found ${files.length} pages to process with OCR`);
+    // Processing pages in chunks of 5
     
-    // Process all pages in parallel
-    const ocrPromises = files.map(async (file, index) => {
-        const imagePath = path.join(tempDir, file);
-        console.log(`Processing page ${index + 1}/${files.length} with OCR...`);
-        
-        const imageBuffer = fs.readFileSync(imagePath);
-        
-        // Use Tesseract OCR with optimized settings
-        const { data: { text } } = await Tesseract.recognize(imageBuffer, 'eng', {
-            logger: m => {
-                if (m.status === 'recognizing text') {
-                    process.stdout.write(`\rPage ${index + 1} OCR: ${Math.round(m.progress * 100)}%`);
-                }
-            },
-            tessedit_pageseg_mode: '6',
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?;:()[]{}\'\"-_=+*/&%$#@~`<>|\\'
+    // Process all chunks in parallel
+    const chunkPromises = chunks.map(async (pageRange, chunkIndex) => {
+        const [response] = await visionClient.batchAnnotateFiles({
+            requests: [{
+                inputConfig: {
+                    mimeType: 'application/pdf',
+                    content: base64Pdf
+                },
+                features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
+                pages: pageRange
+            }]
         });
         
-        console.log(`\nPage ${index + 1} complete`);
-        return { index, text };
+        const pdfResponse = response.responses[0];
+        let chunkText = '';
+        
+        if (pdfResponse.responses) {
+            pdfResponse.responses.forEach((pageResponse) => {
+                if (pageResponse.fullTextAnnotation) {
+                    chunkText += pageResponse.fullTextAnnotation.text + ' ';
+                }
+            });
+        }
+        
+        return {
+            chunkIndex,
+            text: chunkText,
+            pageRange
+        };
     });
     
-    // Wait for all pages to complete
-    const results = await Promise.all(ocrPromises);
+    // Wait for all chunks to complete
+    const results = await Promise.all(chunkPromises);
     
-    // Sort by index and combine text
-    results.sort((a, b) => a.index - b.index);
+    // Sort by chunk index and combine text
+    results.sort((a, b) => a.chunkIndex - b.chunkIndex);
     const fullText = results.map(r => r.text).join(' ');
-    
-    // Clean up temp files
-    files.forEach(file => {
-        fs.unlinkSync(path.join(tempDir, file));
-    });
     
     // Remove all newlines and extra spaces
     const cleanedText = fullText.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
     
-    console.log('\n=== FULL OCR EXTRACTED TEXT ===');
-    console.log(cleanedText);
-    console.log('=== END OF OCR TEXT ===\n');
-    
     return {
         text: cleanedText,
-        pageCount: files.length
+        pageCount: totalPages
     };
 }
 
@@ -148,13 +174,17 @@ const openai = new OpenAI({
   apiKey: config.OPENAI_API_KEY
 });
 
-// Verify GPT API connection
-console.log('GPT API established');
-
 
 app.use(cors());
 // Allow larger JSON payloads but we still truncate content to 50k before processing
 app.use(express.json({ limit: '15mb' }));
+
+// Set request timeout to 60 seconds to prevent hung requests from holding memory
+app.use((req, res, next) => {
+  req.setTimeout(60000); // 60 seconds
+  res.setTimeout(60000);
+  next();
+});
 
 // Ensure logs directory and CSV exist (use external storage folder for hosting)
 const STORAGE_ROOT = process.env.STORAGE_DIR || path.join(__dirname, '..', 'storage');
@@ -198,14 +228,7 @@ function logPromptToCsv(topic, pageTitle, pageUrl) {
 // Quote extraction and analysis endpoint
 app.post('/api/find-quotes', async (req, res) => {
   try {
-    // Log received page content
-    console.log('=== RECEIVED PAGE CONTENT ===');
-    const receivedLength = req.body.pageContent ? req.body.pageContent.length : 0;
-    console.log('Received Content Length:', receivedLength, 'characters');
-    console.log('First 200 chars:', req.body.pageContent ? req.body.pageContent.substring(0, 200) : 'none');
-    console.log('Last 200 chars:', req.body.pageContent ? req.body.pageContent.substring(Math.max(0, receivedLength - 200)) : 'none');
-    
-    const { topic, pageContent, pageUrl, pageTitle } = req.body;
+    const { topic, pageContent, pageUrl, pageTitle, isOCR } = req.body;
     
     if (!topic || !pageContent) {
       return res.status(400).json({ error: 'Topic and page content are required' });
@@ -215,8 +238,6 @@ app.post('/api/find-quotes', async (req, res) => {
 
     const MAX_CHARS = 50000;
     const rawContent = String(pageContent || '').slice(0, MAX_CHARS);
-
-    console.log('After slicing to MAX_CHARS, length:', rawContent.length, 'characters');
 
     // Log the incoming prompt
     logPromptToCsv(topic, pageTitle, pageUrl);
@@ -231,25 +252,20 @@ app.post('/api/find-quotes', async (req, res) => {
     }
     textContent = (textContent || '').replace(/\s+/g, ' ').trim();
     
-    console.log('Normalized text content length:', textContent.length, 'characters');
-    console.log('Text content first 200 chars:', textContent.substring(0, 200));
-    console.log('Text content last 200 chars:', textContent.substring(Math.max(0, textContent.length - 200)));
-    
     // Split content into potential quote segments
     const sentences = textContent
       .split(/(?<=[.!?])\s+/)
       .map(s => s.trim())
       .filter(s => s.length > 20);
     
-    console.log('Number of sentences extracted:', sentences.length);
-    
     // Use Fuse.js for fuzzy matching (items are plain strings, so no keys)
-  const fuse = new Fuse(sentences, {
+  let fuse = new Fuse(sentences, {
       includeScore: true,
       threshold: 0.6  // More loose matching (lower = more permissive)
     });
     
     const searchResults = fuse.search(topic);
+    fuse = null; // Allow garbage collection of Fuse.js index
 
     // Build candidate segments using a hybrid relevance heuristic
     const minLen = 20;  // Lower minimum length
@@ -346,11 +362,13 @@ app.post('/api/find-quotes', async (req, res) => {
     }
 
     // Use GPT to analyze and refine quotes (single call)
+    const ocrNote = isOCR ? '\n\nIMPORTANT: This text was extracted using OCR (Optical Character Recognition) and may contain spelling or grammar errors. Please correct any obvious spelling and grammar mistakes in the quotes while preserving the original meaning and intent.' : '';
+    
     const systemPrompt = `You are a quote analysis assistant. Your task is to:
     - Find quotes that are HIGHLY SPECIFIC to the topic provided by the user
     - Only select quotes that directly mention or discuss the specific topic keywords
     - Do NOT include general quotes about the broader subject area unless they specifically mention the topic keywords
-    - Preserve the original wording exactly as it appears in the text
+    - Preserve the original wording exactly as it appears in the text${ocrNote}
     - For each quote, provide a brief explanation of why it's specifically relevant to the topic
     - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
 
@@ -391,7 +409,6 @@ app.post('/api/find-quotes', async (req, res) => {
       
     } catch (e) {
       console.error('JSON parsing failed:', e.message);
-      console.error('Raw content:', completion.choices[0].message.content);
       // Fallback to original quotes if JSON parsing fails
       analyzedQuotes = relevantQuotes.map((quote, index) => ({
         quote: quote,
@@ -434,7 +451,7 @@ app.post('/api/format-citation', async (req, res) => {
       res.json(citationResponse);
 
     } catch (citationError) {
-      console.error('Citation generator error:', citationError.message);
+      console.error('Citation error:', citationError.message);
       
       // Fallback to manual formatting
       const currentYear = new Date().getFullYear();
@@ -468,24 +485,16 @@ app.post('/api/format-citation', async (req, res) => {
 
 // PDF extraction endpoint
 app.post('/api/extract-pdf', async (req, res) => {
-  console.log('=== PDF ENDPOINT HIT ===');
   try {
-    console.log('PDFParser available:', !!PDFParser);
     if (!PDFParser) {
-      console.log('PDFParser is not available');
       return res.status(500).json({ error: 'PDF processing not available. Please install pdf2json: npm install pdf2json' });
     }
-    console.log('PDFParser is available, proceeding...');
 
     const { url, title } = req.body;
     
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
-
-    console.log('=== PDF EXTRACTION REQUEST ===');
-    console.log('URL:', url);
-    console.log('Title:', title);
 
     let pdfBuffer;
     
@@ -498,44 +507,27 @@ app.post('/api/extract-pdf', async (req, res) => {
       }
       // Decode URL-encoded characters (e.g., %20 -> space)
       filePath = decodeURIComponent(filePath);
-      console.log('Reading local PDF file:', filePath);
       
       try {
         pdfBuffer = fs.readFileSync(filePath);
       } catch (error) {
-        // Don't log verbose errors for permission/access issues (expected for protected files)
-        if (error.code === 'EACCES' || error.code === 'EPERM') {
-          console.log('Local PDF access denied (protected):', error.code);
-        } else {
-          console.error('Error reading local PDF:', error.message);
-        }
         return res.status(400).json({ error: 'Could not read local PDF file' });
       }
     } else {
       // Handle remote URLs
-      console.log('Downloading PDF from URL:', url);
       try {
         const response = await axios.get(url, { responseType: 'arraybuffer' });
         pdfBuffer = Buffer.from(response.data);
       } catch (error) {
-        // Don't log verbose errors for access denied (expected for protected PDFs)
-        if (error.response && (error.response.status === 403 || error.response.status === 401)) {
-          console.log('PDF access denied (protected):', error.response.status);
-        } else {
-          console.error('Error downloading PDF:', error.message);
-        }
         return res.status(400).json({ error: 'Could not download PDF from URL' });
       }
     }
-
-    console.log('PDF buffer size:', pdfBuffer.length, 'bytes');
 
     // Extract text from PDF using pdf2json
     const parser = new PDFParser();
     
     return new Promise((resolve, reject) => {
       parser.on('pdfParser_dataError', (errData) => {
-        console.log('PDF parsing failed (may be encrypted or corrupted)');
         reject(new Error('PDF parsing failed'));
       });
       
@@ -544,12 +536,9 @@ app.post('/api/extract-pdf', async (req, res) => {
           // Extract text from all pages
           let extractedText = '';
           const pageCount = pdfData.Pages ? pdfData.Pages.length : 0;
-          console.log('PDF has', pageCount, 'pages');
           
           if (pdfData.Pages && pdfData.Pages.length > 0) {
             pdfData.Pages.forEach((page, pageIndex) => {
-              const pageStartLength = extractedText.length;
-              
               if (page.Texts) {
                 page.Texts.forEach(text => {
                   if (text.R) {
@@ -561,68 +550,47 @@ app.post('/api/extract-pdf', async (req, res) => {
                   }
                 });
               }
-              
-              const pageEndLength = extractedText.length;
-              const pageCharCount = pageEndLength - pageStartLength;
-              console.log(`Page ${pageIndex + 1}: extracted ${pageCharCount} characters (total so far: ${pageEndLength})`);
-              
-              if (pageCharCount < 100 && pageIndex > 0) {
-                console.log(`WARNING: Page ${pageIndex + 1} has very little text (${pageCharCount} chars) - may be extraction issue`);
-              }
             });
           }
-          
-          console.log('Total extracted text length:', extractedText.length);
-          console.log('First 200 chars:', extractedText.substring(0, 200));
-          console.log('Last 200 chars:', extractedText.substring(Math.max(0, extractedText.length - 200)));
 
           // Detect if this is a scanned PDF (very little text extracted)
           const avgCharsPerPage = pageCount > 0 ? extractedText.length / pageCount : 0;
           const isScannedPDF = pageCount > 0 && avgCharsPerPage < 500; // Less than 500 chars per page suggests scanned PDF
+          let ocrWasUsed = false; // Track if OCR was used
           
-          if (isScannedPDF && pdfPoppler && Tesseract) {
-            console.log(`Detected scanned PDF (avg ${avgCharsPerPage.toFixed(0)} chars/page). Attempting OCR...`);
-            
-            // Check page limit (30 pages)
-            if (pageCount > 30) {
-              console.log(`PDF has ${pageCount} pages, exceeding 30-page limit for OCR`);
-              resolve({
-                error: 'scanned_pdf_too_large',
-                message: `This PDF appears to be scanned (image-based) and has ${pageCount} pages. OCR processing is limited to 30 pages for performance reasons. Please use a text-based version of this PDF, or select a specific section to analyze.`,
-                pageCount: pageCount,
-                extractedText: extractedText // Return what we got from regular extraction
-              });
-              return;
-            }
-            
-            // Save PDF buffer to temp file for OCR processing
-            const tempDir = path.join(__dirname, '..', 'scanning', 'temp');
-            if (!fs.existsSync(tempDir)) {
-                fs.mkdirSync(tempDir, { recursive: true });
-            }
-            const tempPdfPath = path.join(tempDir, `temp_${Date.now()}.pdf`);
-            fs.writeFileSync(tempPdfPath, pdfBuffer);
-            
-            try {
-              console.log('Starting OCR extraction...');
-              const ocrResult = await extractPDFTextOCR(tempPdfPath);
+          if (isScannedPDF && visionClient) {
+            // Check if we have cached OCR content for this PDF
+            const cachedData = getCachedPdfContent(url);
+            if (cachedData && cachedData.isOCR) {
+              extractedText = cachedData.content;
+              ocrWasUsed = true;
+            } else {
               
-              // Clean up temp PDF file
-              fs.unlinkSync(tempPdfPath);
-              
-              console.log(`OCR extraction complete: ${ocrResult.text.length} characters extracted`);
-              
-              // Use OCR text instead
-              extractedText = ocrResult.text;
-              
-            } catch (ocrError) {
-              console.error('OCR extraction failed:', ocrError.message);
-              // Clean up temp PDF file
-              if (fs.existsSync(tempPdfPath)) {
-                fs.unlinkSync(tempPdfPath);
+              // Check page limit (30 pages for performance)
+              if (pageCount > 30) {
+                resolve({
+                  error: 'scanned_pdf_too_large',
+                  message: `This PDF appears to be scanned (image-based) and has ${pageCount} pages. OCR processing is limited to 30 pages for performance reasons. Please use a text-based version of this PDF, or select a specific section to analyze.`,
+                  pageCount: pageCount,
+                  extractedText: extractedText
+                });
+                return;
               }
-              // Continue with regular extraction result
-              console.log('Falling back to regular extraction result');
+              
+              try {
+                const ocrResult = await extractPDFTextOCR(pdfBuffer, pageCount);
+                
+                // Use OCR text instead
+                extractedText = ocrResult.text;
+                // Mark that OCR was used
+                ocrWasUsed = true;
+                
+                // Cache the OCR result
+                cachePdfContent(url, extractedText, true);
+                
+              } catch (ocrError) {
+                console.error('OCR failed:', ocrError.message);
+              }
             }
           }
 
@@ -630,7 +598,7 @@ app.post('/api/extract-pdf', async (req, res) => {
           const SEGMENT_SIZE = 50000;
           if (extractedText.length > SEGMENT_SIZE) {
             // Cache the full content for later segment retrieval
-            cachePdfContent(url, extractedText);
+            cachePdfContent(url, extractedText, ocrWasUsed);
             
             // Create segment metadata
             const segments = [];
@@ -642,8 +610,6 @@ app.post('/api/extract-pdf', async (req, res) => {
               });
             }
             
-            console.log('PDF requires segmentation, cached content for URL:', url);
-            
             resolve({
               requiresSegmentation: true,
               totalLength: extractedText.length,
@@ -651,7 +617,8 @@ app.post('/api/extract-pdf', async (req, res) => {
               segments: segments,
               url: url,
               title: title || 'PDF Document',
-              pageCount: pageCount
+              pageCount: pageCount,
+              isOCR: ocrWasUsed
             });
           } else {
             resolve({
@@ -659,7 +626,8 @@ app.post('/api/extract-pdf', async (req, res) => {
               url: url,
               title: title || 'PDF Document',
               pageCount: pageCount,
-              info: pdfData.Meta
+              info: pdfData.Meta,
+              isOCR: ocrWasUsed
             });
           }
         } catch (error) {
@@ -676,7 +644,7 @@ app.post('/api/extract-pdf', async (req, res) => {
     });
 
   } catch (error) {
-    console.log('PDF extraction failed:', error.message);
+    console.error('PDF extraction failed:', error.message);
     res.status(500).json({ error: 'Failed to extract PDF content' });
   }
 });
@@ -691,28 +659,27 @@ app.post('/api/get-pdf-segment', async (req, res) => {
     }
 
     // Retrieve cached content
-    const fullText = getCachedPdfContent(pdfUrl);
+    const cached = getCachedPdfContent(pdfUrl);
     
-    if (!fullText) {
+    if (!cached) {
       return res.status(404).json({ error: 'PDF content not found in cache. Please re-extract the PDF.' });
     }
 
     const SEGMENT_SIZE = 50000;
     const start = segmentIndex * SEGMENT_SIZE;
-    const end = Math.min(start + SEGMENT_SIZE, fullText.length);
-    const segmentContent = fullText.substring(start, end);
-
-    console.log(`Returning segment ${segmentIndex} (${start}-${end}) for PDF:`, pdfUrl);
+    const end = Math.min(start + SEGMENT_SIZE, cached.content.length);
+    const segmentContent = cached.content.substring(start, end);
 
     res.json({
       content: segmentContent,
       segmentIndex: segmentIndex,
       start: start,
-      end: end
+      end: end,
+      isOCR: cached.isOCR || false
     });
 
   } catch (error) {
-    console.log('Segment extraction failed:', error.message);
+    console.error('Segment extraction failed:', error.message);
     res.status(500).json({ error: 'Failed to extract segment' });
   }
 });
