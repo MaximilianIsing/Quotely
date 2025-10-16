@@ -1,72 +1,813 @@
-class QuotelyPopup{constructor(){this.serverUrl="https://quotely-rmgh.onrender.com",this.lastPageTitle=null,this.lastPageUrl=null,this.storageKey="quotely_last_session",this.citationsKey="quotely_citations",this.quotesKey="quotely_quotes",this.segmentStateKey="quotely_segment_state",this.initializeElements(),this.attachEventListeners(),this.restoreLastSession(),this.checkPendingSegmentSelection()}initializeElements(){this.topicInput=document.getElementById("topic-input"),this.findQuotesBtn=document.getElementById("find-quotes-btn"),this.resultsSection=document.getElementById("results-section"),this.quotesContainer=document.getElementById("quotes-container"),this.errorMessage=document.getElementById("error-message"),this.citationFormat=document.getElementById("citation-format"),this.btnText=this.findQuotesBtn.querySelector(".btn-text"),this.searchIcon=this.findQuotesBtn.querySelector(".search-icon"),this.loadingSpinner=this.findQuotesBtn.querySelector(".loading-spinner")}attachEventListeners(){this.findQuotesBtn.addEventListener("click",()=>this.findQuotes()),this.topicInput.addEventListener("keypress",t=>{"Enter"===t.key&&t.ctrlKey&&this.findQuotes()}),this.topicInput.addEventListener("input",()=>{this.saveCurrentInput()}),this.citationFormat.addEventListener("change",()=>this.updateAllCitations())}autoResizeTextarea(){this.topicInput.style.height="auto";let t=Math.min(this.topicInput.scrollHeight+4,120);this.topicInput.style.height=t+"px"}saveCurrentInput(){let t=this.topicInput.value;t.trim()&&localStorage.setItem("quotely_current_topic",t)}async findQuotes(){let t=this.topicInput.value.trim();if(!t){this.showError("Please enter a topic to search for quotes.");return}localStorage.removeItem(this.segmentStateKey),this.clearCurrentPageQuotes();let e=document.querySelector(".container");e.classList.remove("expanded","medium-expanded","segment-expanded"),this.setLoading(!0),this.hideError(),this.hideResults();try{let[i]=await chrome.tabs.query({active:!0,currentWindow:!0}),n=i.url&&(i.url.includes(".pdf")||i.url.startsWith("file://")&&i.url.endsWith(".pdf")),a;if(n){try{let o;if(i.url.startsWith("file://")){let r=await fetch(i.url).then(t=>t.blob()),s=await r.arrayBuffer(),l=btoa(new Uint8Array(s).reduce((t,e)=>t+String.fromCharCode(e),""));o={fileContent:l,title:i.title||"Local PDF",isLocalFile:!0}}else o={url:i.url,title:i.title};let c=await fetch(`${this.serverUrl}/api/extract-pdf`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(o)});if(c.ok){if((a=await c.json()).requiresSegmentation){this.setLoading(!1);let d=await this.showPdfSegmentSelector(a,i.url);if(null===d)return;let u=await fetch(`${this.serverUrl}/api/get-pdf-segment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfUrl:i.url,segmentIndex:d})});if(!u.ok)throw Error(`Segment retrieval failed: ${u.status}`);let p=await u.json();a={content:p.content,title:a.title,url:a.url},this.setLoading(!0)}}else throw Error(`PDF extraction failed: ${c.status}`)}catch(h){console.error("PDF extraction error:",h),"scanned_pdf_too_large"===a.error&&a.message?this.showError(a.message):this.showError("This PDF page is protected. Download this pdf locally then try again.");return}if(a&&"scanned_pdf_too_large"===a.error){this.setLoading(!1),this.showError("This PDF requires scanning but exceeds the 30-page limit for OCR processing.");return}}else{let g=await chrome.scripting.executeScript({target:{tabId:i.id},func(){let t=function t(){let e=document.documentElement.outerHTML,i=new DOMParser,n=i.parseFromString(e,"text/html");["script","style","noscript","iframe","embed","object","nav","header","footer","aside","menu","sidebar",".nav",".navbar",".menu",".sidebar",".footer",".header",".navigation",".breadcrumb",".pagination",".ads",".advertisement",".social",".share",".comments",".related",".recommended",".cookie-banner",".popup",".modal",".overlay"].forEach(t=>{let e=n.querySelectorAll(t);e.forEach(t=>t.remove())});let a=null;for(let o of["main","article",'[role="main"]',".content","#content",".main-content",".article-content",".post-content",".entry-content",".document-content",".page-content",".text-content",".blog-content",".post-body",".single-post",".post",".entry",".story"]){let r=n.querySelector(o);if(r&&r.textContent.trim().length>500){a=r;break}}if(!a){let s=n.body;if(s){let l=s.querySelectorAll("div, section, p"),c=null,d=0;l.forEach(t=>{let e=t.textContent.trim(),i=e.length;if(i<200||i>1e5)return;let n=t.querySelectorAll("a").length,a=t.querySelectorAll("p").length,o=t.querySelectorAll("img").length,r=3*a-n-2*o+i/100;r>d&&(d=r,c=t)}),c&&(a=c)}}a||(a=n.body||n.documentElement);let u=a?a.textContent:"";return u=u.replace(/\s+/g," ").replace(/^\s+|\s+$/g,"").replace(/[^\w\s.,!?;:'"()-]/g,"").trim()}();return{content:t,url:window.location.href,title:document.title}}}).catch(()=>[]);if(!g||0===g.length||!g[0]||!g[0].result||!g[0].result.content){this.showError("Cannot access this page content. Try another tab.");return}a=g[0].result}if(this.lastPageTitle=a.title||"Current Page",this.lastPageUrl=a.url||"Unknown URL",a.content&&a.content.length>5e4){this.setLoading(!1);let y=await this.showSegmentSelector(a.content);if(null===y)return;a.content=y,this.setLoading(!0)}let m=(a.content||"").slice(0,5e4),q=await fetch(`${this.serverUrl}/api/find-quotes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:t,pageContent:m,pageUrl:this.lastPageUrl,pageTitle:this.lastPageTitle,isOCR:a.isOCR||!1})});if(!q.ok){if(413===q.status){this.showError("The page is too large to analyze. Try a simpler page or select text and paste it instead.");return}throw Error(`Server error: ${q.status}`)}let f=await q.json();f.quotes&&f.quotes.length>0?(this.lastPageTitle=f.pageTitle||this.lastPageTitle,this.lastPageUrl=f.pageUrl||this.lastPageUrl,this.displayQuotes(f.quotes,this.lastPageTitle,this.lastPageUrl)):this.showError("No relevant quotes found. Try a different topic or check if the page has relevant content.")}catch(v){console.error("Error finding quotes:",v),this.showError("Failed to find quotes. The server might be offline. Please try again later.")}finally{this.setLoading(!1)}}async showPdfSegmentSelector(t,e=null){let i={isPdf:!0,pdfData:t,pdfUrl:e,topic:this.topicInput.value,pageTitle:this.lastPageTitle||t.title,pageUrl:this.lastPageUrl||e,timestamp:Date.now()};return localStorage.setItem(this.segmentStateKey,JSON.stringify(i)),new Promise(e=>{this.hideResults(),this.hideError();let i=document.querySelector(".results-header");i&&(i.style.display="none");let n=`
+// Quotely Popup Script
+class QuotelyPopup {
+    constructor() {
+        this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
+        this.lastPageTitle = null;
+        this.lastPageUrl = null;
+        this.storageKey = 'quotely_last_session';
+        this.citationsKey = 'quotely_citations';
+        this.quotesKey = 'quotely_quotes'; // Unified quote list with citation state
+        this.segmentStateKey = 'quotely_segment_state'; // State for pending segment selection
+        this.initializeElements();
+        this.attachEventListeners();
+        this.restoreLastSession();
+        this.checkPendingSegmentSelection();
+    
+    }
+
+    initializeElements() {
+        this.topicInput = document.getElementById('topic-input');
+        this.findQuotesBtn = document.getElementById('find-quotes-btn');
+        this.resultsSection = document.getElementById('results-section');
+        this.quotesContainer = document.getElementById('quotes-container');
+        this.errorMessage = document.getElementById('error-message');
+        this.citationFormat = document.getElementById('citation-format');
+        this.btnText = this.findQuotesBtn.querySelector('.btn-text');
+        this.searchIcon = this.findQuotesBtn.querySelector('.search-icon');
+        this.loadingSpinner = this.findQuotesBtn.querySelector('.loading-spinner');
+    }
+
+    attachEventListeners() {
+        this.findQuotesBtn.addEventListener('click', () => this.findQuotes());
+        this.topicInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                this.findQuotes();
+            }
+        });
+        this.topicInput.addEventListener('input', () => {
+            this.saveCurrentInput();
+        });
+        this.citationFormat.addEventListener('change', () => this.updateAllCitations());
+    }
+
+    autoResizeTextarea() {
+        // Reset height to auto to get the correct scrollHeight
+        this.topicInput.style.height = 'auto';
+        
+        // Calculate the new height based on scrollHeight, always add 5px
+        const newHeight = Math.min(this.topicInput.scrollHeight + 4, 120); // Max height of 120px
+        
+        // Set the new height
+        this.topicInput.style.height = newHeight + 'px';
+    }
+
+    saveCurrentInput() {
+        // Save the current input text to local storage
+        const currentTopic = this.topicInput.value;
+        if (currentTopic.trim()) {
+            localStorage.setItem('quotely_current_topic', currentTopic);
+        }
+    }
+
+    async findQuotes() {
+        const topic = this.topicInput.value.trim();
+        if (!topic) {
+            this.showError('Please enter a topic to search for quotes.');
+            return;
+        }
+
+        // Clear any pending segment selection state when starting a new search
+        localStorage.removeItem(this.segmentStateKey);
+
+        // Clear current page quotes when starting a new search (but keep pins)
+        this.clearCurrentPageQuotes();
+
+        // Collapse the container when starting a new search
+        const container = document.querySelector('.container');
+        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
+
+        this.setLoading(true);
+        this.hideError();
+        this.hideResults();
+
+        try {
+            // Get current tab information
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            
+            // Check if this is a PDF page
+            const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
+            
+            let pageData;
+            
+            if (isPDF) {
+                // For PDFs, handle local vs remote files differently
+                try {
+                    let requestBody;
+                    
+                    // Check if it's a local file
+                    if (tab.url.startsWith('file://')) {
+                        // Read local PDF file and send as base64
+                        const pdfBlob = await fetch(tab.url).then(r => r.blob());
+                        const arrayBuffer = await pdfBlob.arrayBuffer();
+                        const base64Pdf = btoa(
+                            new Uint8Array(arrayBuffer)
+                                .reduce((data, byte) => data + String.fromCharCode(byte), '')
+                        );
+                        
+                        requestBody = {
+                            fileContent: base64Pdf,
+                            title: tab.title || 'Local PDF',
+                            isLocalFile: true
+                        };
+                    } else {
+                        // For remote PDFs, just send the URL
+                        requestBody = {
+                            url: tab.url,
+                            title: tab.title
+                        };
+                    }
+                    
+                    const pdfResponse = await fetch(`${this.serverUrl}/api/extract-pdf`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+                    
+                    if (pdfResponse.ok) {
+                        pageData = await pdfResponse.json();
+                        // Check if PDF requires segmentation
+                        if (pageData.requiresSegmentation) {
+                            // Temporarily stop loading to show segment selector
+                            this.setLoading(false);
+                            
+                            // Show segment selection UI for PDF
+                            const selectedSegmentIndex = await this.showPdfSegmentSelector(pageData, tab.url);
+                            if (selectedSegmentIndex === null) {
+                                // User cancelled (shouldn't happen as we removed cancel button, but just in case)
+                                return;
+                            }
+                            
+                            // Request the specific segment from server
+                            const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    pdfUrl: tab.url,
+                                    segmentIndex: selectedSegmentIndex
+                                })
+                            });
+                            
+                            if (!segmentResponse.ok) {
+                                throw new Error(`Segment retrieval failed: ${segmentResponse.status}`);
+                            }
+                            
+                            const segmentData = await segmentResponse.json();
+                            
+                            // Set pageData with the segment content
+                            pageData = {
+                                content: segmentData.content,
+                                title: pageData.title,
+                                url: pageData.url
+                            };
+                            
+                            // Resume loading for quote finding
+                            this.setLoading(true);
+                        }
+                    } else {
+                        throw new Error(`PDF extraction failed: ${pdfResponse.status}`);
+                    }
+                } catch (error) {
+                    console.error('PDF extraction error:', error);
+                    
+                    // Check if it's a scanned PDF error response
+                    if (pageData.error === 'scanned_pdf_too_large' && pageData.message) {
+                        this.showError(pageData.message);
+                    } else {
+                        this.showError('This PDF page is protected. Download this pdf locally then try again.');
+                    }
+                    return;
+                }
+                
+                // Check if PDF exceeded 30-page limit (no content extracted)
+                if (pageData && pageData.error === 'scanned_pdf_too_large') {
+                    this.setLoading(false);
+                    this.showError('This PDF requires scanning but exceeds the 30-page limit for OCR processing.');
+                    return;
+                }
+            } else {
+                // For HTML pages, use the existing extraction
+                const results = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: () => {
+                    // Beautiful Soup-like content extraction
+                    function extractMainContent() {
+                        // Get the full HTML
+                        const html = document.documentElement.outerHTML;
+                        
+                        // Create a new DOMParser to parse the HTML
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        
+                        // Remove unwanted elements (like Beautiful Soup's decompose())
+                        const unwantedSelectors = [
+                            'script', 'style', 'noscript', 'iframe', 'embed', 'object',
+                            'nav', 'header', 'footer', 'aside', 'menu', 'sidebar',
+                            '.nav', '.navbar', '.menu', '.sidebar', '.footer', '.header',
+                            '.navigation', '.breadcrumb', '.pagination', '.ads', '.advertisement',
+                            '.social', '.share', '.comments', '.related', '.recommended',
+                            '.cookie-banner', '.popup', '.modal', '.overlay'
+                        ];
+                        
+                        unwantedSelectors.forEach(selector => {
+                            const elements = doc.querySelectorAll(selector);
+                            elements.forEach(el => el.remove());
+                        });
+                        
+                        // Find the main content using multiple strategies
+                        const contentSelectors = [
+                            'main', 'article', '[role="main"]',
+                            '.content', '#content', '.main-content', '.article-content',
+                            '.post-content', '.entry-content', '.document-content',
+                            '.page-content', '.text-content', '.blog-content', '.post-body',
+                            '.single-post', '.post', '.entry', '.story'
+                        ];
+                        
+                        let mainContent = null;
+                        
+                        // Strategy 1: Find by semantic selectors
+                        for (const selector of contentSelectors) {
+                            const element = doc.querySelector(selector);
+                            if (element && element.textContent.trim().length > 500) {
+                                mainContent = element;
+                                break;
+                            }
+                        }
+                        
+                        // Strategy 2: Find by content density (like Beautiful Soup's content scoring)
+                        if (!mainContent) {
+                            const body = doc.body;
+                            if (body) {
+                                const allDivs = body.querySelectorAll('div, section, p');
+                                let bestCandidate = null;
+                                let maxScore = 0;
+                                
+                                allDivs.forEach(el => {
+                                    const text = el.textContent.trim();
+                                    const textLength = text.length;
+                                
+                                    // Skip if too short or too long
+                                    if (textLength < 200 || textLength > 100000) return;
+                                    
+                                    // Calculate content score (like Beautiful Soup)
+                                    const links = el.querySelectorAll('a').length;
+                                    const paragraphs = el.querySelectorAll('p').length;
+                                    const images = el.querySelectorAll('img').length;
+                                    
+                                    // Higher score for more paragraphs and fewer links/images
+                                    const score = paragraphs * 3 - links - images * 2 + (textLength / 100);
+                                    
+                                    if (score > maxScore) {
+                                        maxScore = score;
+                                        bestCandidate = el;
+                                    }
+                                });
+                                
+                                if (bestCandidate) {
+                                    mainContent = bestCandidate;
+                                }
+                            }
+                        }
+                        
+                        // Strategy 3: Fallback to body
+                        if (!mainContent) {
+                            mainContent = doc.body || doc.documentElement;
+                        }
+                        
+                        // Extract clean text
+                        let content = mainContent ? mainContent.textContent : '';
+                        
+                        // Clean up the content
+                        content = content
+                            .replace(/\s+/g, ' ') // Normalize whitespace
+                            .replace(/^\s+|\s+$/g, '') // Trim
+                            .replace(/[^\w\s.,!?;:'"()-]/g, '') // Remove special chars but keep punctuation
+                            .trim();
+                        
+                        return content;
+                    }
+                    
+                    const content = extractMainContent();
+                    
+                    return {
+                        content: content,
+                        url: window.location.href,
+                        title: document.title
+                    };
+                }
+            }).catch(() => []);
+
+                if (!results || results.length === 0 || !results[0] || !results[0].result || !results[0].result.content) {
+                    this.showError('Cannot access this page content. Try another tab.');
+                    return;
+                }
+
+                pageData = results[0].result;
+
+            }
+            
+            this.lastPageTitle = pageData.title || 'Current Page';
+            this.lastPageUrl = pageData.url || 'Unknown URL';
+            
+            // Check if content is very large (> 50,000 characters) - for both PDF and HTML
+            if (pageData.content && pageData.content.length > 50000) {
+
+                
+                // Temporarily stop loading to show segment selector
+                this.setLoading(false);
+                
+                // Show segment selection UI
+                const selectedSegment = await this.showSegmentSelector(pageData.content);
+                if (selectedSegment === null) {
+                    // User cancelled
+
+                    return;
+                }
+                
+                
+                // Replace content with selected segment
+                pageData.content = selectedSegment;
+                
+                // Resume loading for quote finding
+                this.setLoading(true);
+            }
+            
+            // Log content length before sending
+
+            
+            // Enforce 50k character limit client-side (safety check)
+            const limitedContent = (pageData.content || '').slice(0, 50000);
+            
+
+            // Send to server for analysis
+            const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    topic: topic,
+                    pageContent: limitedContent,
+                    pageUrl: this.lastPageUrl,
+                    pageTitle: this.lastPageTitle,
+                    isOCR: pageData.isOCR || false
+                })
+            });
+
+            if (!response.ok) {
+                if (response.status === 413) {
+                    this.showError('The page is too large to analyze. Try a simpler page or select text and paste it instead.');
+                    return;
+                }
+                throw new Error(`Server error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data.quotes && data.quotes.length > 0) {
+                this.lastPageTitle = data.pageTitle || this.lastPageTitle;
+                this.lastPageUrl = data.pageUrl || this.lastPageUrl;
+                this.displayQuotes(data.quotes, this.lastPageTitle, this.lastPageUrl);
+            } else {
+                this.showError('No relevant quotes found. Try a different topic or check if the page has relevant content.');
+            }
+
+        } catch (error) {
+            console.error('Error finding quotes:', error);
+            this.showError('Failed to find quotes. The server might be offline. Please try again later.');
+        } finally {
+            this.setLoading(false);
+        }
+    }
+
+    async showPdfSegmentSelector(pdfData, pdfUrl = null) {
+        // Save PDF segment selection state
+        const segmentState = {
+            isPdf: true,
+            pdfData: pdfData,
+            pdfUrl: pdfUrl,
+            topic: this.topicInput.value,
+            pageTitle: this.lastPageTitle || pdfData.title,
+            pageUrl: this.lastPageUrl || pdfUrl,
+            timestamp: Date.now()
+        };
+        localStorage.setItem(this.segmentStateKey, JSON.stringify(segmentState));
+
+        return new Promise((resolve) => {
+
+            // Hide the current results/error sections
+            this.hideResults();
+            this.hideError();
+
+            // Hide the results header (Found Quotes and Citation Format)
+            const resultsHeader = document.querySelector('.results-header');
+            if (resultsHeader) {
+                resultsHeader.style.display = 'none';
+            }
+
+            // Create segment selector UI
+            const selectorHTML = `
                 <div class="segment-container">
                     <div class="segment-selector">
-                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(t.totalLength/1e3)}k characters)</p>
+                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(pdfData.totalLength / 1000)}k characters)</p>
                         <p style="margin-top: 0; margin-bottom: 8px;">Select a segment to scan:</p>
                         <div class="segments-list">
-                            ${this.createSegmentRows(t.segments)}
+                            ${this.createSegmentRows(pdfData.segments)}
                         </div>
                     </div>
                 </div>
-            `;this.quotesContainer.innerHTML=n,this.resultsSection.style.display="block";let a=document.querySelector(".container");a.classList.add("segment-expanded"),setTimeout(()=>{let t=this.quotesContainer.querySelectorAll(".segment-option");t.forEach(t=>{t.addEventListener("click",()=>{let i=parseInt(t.dataset.index);localStorage.removeItem(this.segmentStateKey);let n=document.querySelector(".container");n.classList.remove("expanded","medium-expanded","segment-expanded"),this.hideResults(),e(i)})})},100)})}createSegmentRows(t){let e=[];for(let i=0;i<t.length;i+=5){let n=t.slice(i,i+5),a=`
+            `;
+
+            this.quotesContainer.innerHTML = selectorHTML;
+            this.resultsSection.style.display = 'block';
+
+            // Expand container to show segments
+            const container = document.querySelector('.container');
+            container.classList.add('segment-expanded');
+
+            // Add event listeners with slight delay to ensure DOM is ready
+            setTimeout(() => {
+                const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
+
+                segmentButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const index = parseInt(btn.dataset.index);
+      
+                        // Clear segment selection state
+                        localStorage.removeItem(this.segmentStateKey);
+                        
+                        // Collapse container and hide segment selector
+                        const container = document.querySelector('.container');
+                        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
+                        this.hideResults();
+                        
+                        // Resolve with the selected segment index
+                        resolve(index);
+                    });
+                });
+            }, 100);
+        });
+    }
+
+    createSegmentRows(segments) {
+        const rows = [];
+        for (let i = 0; i < segments.length; i += 5) {
+            const rowSegments = segments.slice(i, i + 5);
+            const rowHTML = `
                 <div class="segment-row">
-                    ${n.map(t=>`
-                        <button class="segment-option" data-index="${t.index}" title="Characters ${t.start.toLocaleString()} - ${t.end.toLocaleString()}">
-                            ${t.index+1}
+                    ${rowSegments.map(seg => `
+                        <button class="segment-option" data-index="${seg.index}" title="Characters ${seg.start.toLocaleString()} - ${seg.end.toLocaleString()}">
+                            ${seg.index + 1}
                         </button>
-                    `).join("")}
+                    `).join('')}
                 </div>
-            `;e.push(a)}return e.join("")}async showSegmentSelector(t,e=null){let i={fullText:t,topic:e||this.topicInput.value,pageTitle:this.lastPageTitle,pageUrl:this.lastPageUrl,timestamp:Date.now()};return localStorage.setItem(this.segmentStateKey,JSON.stringify(i)),new Promise(e=>{let i=[];for(let n=0;n<t.length;n+=5e4){let a=t.substring(n,Math.min(n+5e4,t.length)),o=this.escapeHtml(a.substring(0,150).trim())+"...";i.push({index:i.length,start:n,end:Math.min(n+5e4,t.length),preview:o})}this.hideResults(),this.hideError();let r=document.querySelector(".results-header");r&&(r.style.display="none");let s=`
+            `;
+            rows.push(rowHTML);
+        }
+        return rows.join('');
+    }
+
+    async showSegmentSelector(fullText, topic = null) {
+        // Save segment selection state
+        const segmentState = {
+            fullText: fullText,
+            topic: topic || this.topicInput.value,
+            pageTitle: this.lastPageTitle,
+            pageUrl: this.lastPageUrl,
+            timestamp: Date.now()
+        };
+        localStorage.setItem(this.segmentStateKey, JSON.stringify(segmentState));
+
+        return new Promise((resolve) => {
+            // Create segments
+            const SEGMENT_SIZE = 50000;
+            const segments = [];
+            for (let i = 0; i < fullText.length; i += SEGMENT_SIZE) {
+                const segmentText = fullText.substring(i, Math.min(i + SEGMENT_SIZE, fullText.length));
+                // Escape HTML characters in preview
+                const preview = this.escapeHtml(segmentText.substring(0, 150).trim()) + '...';
+                segments.push({
+                    index: segments.length,
+                    start: i,
+                    end: Math.min(i + SEGMENT_SIZE, fullText.length),
+                    preview: preview
+                });
+            }
+
+            // Hide the current results/error sections
+            this.hideResults();
+            this.hideError();
+
+            // Hide the results header (Found Quotes and Citation Format)
+            const resultsHeader = document.querySelector('.results-header');
+            if (resultsHeader) {
+                resultsHeader.style.display = 'none';
+            }
+
+            // Create segment selector UI
+            const selectorHTML = `
                 <div class="segment-container">
                     <div class="segment-selector">
-                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(t.length/1e3)}k characters)</p>
+                        <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(fullText.length / 1000)}k characters)</p>
                         <p style="margin-top: 0; margin-bottom: 8px;">Select a segment to scan:</p>
                         <div class="segments-list">
-                            ${this.createSegmentRows(i)}
+                            ${this.createSegmentRows(segments)}
                         </div>
                     </div>
                 </div>
-            `;this.quotesContainer.innerHTML=s,this.resultsSection.style.display="block";let l=document.querySelector(".container");l.classList.add("segment-expanded"),setTimeout(()=>{let i=this.quotesContainer.querySelectorAll(".segment-option");i.forEach(i=>{i.addEventListener("click",()=>{let n=parseInt(i.dataset.index),a=5e4*n,o=Math.min(a+5e4,t.length),r=t.substring(a,o);localStorage.removeItem(this.segmentStateKey);let s=document.querySelector(".container");s.classList.remove("expanded","medium-expanded","segment-expanded"),this.hideResults(),e(r)})})},100)})}escapeHtml(t){let e=document.createElement("div");return e.textContent=t,e.innerHTML}displayQuotes(t,e,i){this.quotesContainer.innerHTML="";let n=document.querySelector(".results-header");n&&(n.style.display=""),this.appendPinnedQuotesFromOtherSites();let a=JSON.parse(localStorage.getItem("quotely_pinned")||"[]"),o=a.map(t=>t.quote),r=t.filter(t=>{let e=t.quote||t;return!o.includes(e)});r.forEach((t,n)=>{let a=this.createQuoteElement(t,n,e,i);this.quotesContainer.appendChild(a)}),this.showResults(),this.saveSession(t,e,i),this.restoreAllCitationStates();let s=document.querySelector(".container");s.classList.remove("medium-expanded"),s.classList.add("expanded")}createQuoteElement(t,e,i,n){let a=document.createElement("div");a.className="quote-item";let o=t.quote||t,r=t.relevance||"Relevant to topic";a.innerHTML=`
-            <div class="quote-pin" data-index="${e}">
+            `;
+
+            this.quotesContainer.innerHTML = selectorHTML;
+            this.resultsSection.style.display = 'block';
+
+            // Expand container to show segments
+            const container = document.querySelector('.container');
+            container.classList.add('segment-expanded');
+
+            // Add event listeners with slight delay to ensure DOM is ready
+            setTimeout(() => {
+                const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
+
+                segmentButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const index = parseInt(btn.dataset.index);
+                        const start = index * SEGMENT_SIZE;
+                        const end = Math.min(start + SEGMENT_SIZE, fullText.length);
+                        const selectedSegment = fullText.substring(start, end);
+
+                        // Clear segment selection state
+                        localStorage.removeItem(this.segmentStateKey);
+                        
+                        // Collapse container and hide segment selector
+                        const container = document.querySelector('.container');
+                        container.classList.remove('expanded', 'medium-expanded', 'segment-expanded');
+                        this.hideResults();
+                        
+                        // Resolve with the selected segment
+                        resolve(selectedSegment);
+                    });
+                });
+            }, 100);
+        });
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // extractPageContent removed; using inline function via chrome.scripting.executeScript
+
+    displayQuotes(quotes, pageTitle, pageUrl) {
+        this.quotesContainer.innerHTML = '';
+        
+        // Show the results header (Found Quotes and Citation Format)
+        const resultsHeader = document.querySelector('.results-header');
+        if (resultsHeader) {
+            resultsHeader.style.display = '';
+        }
+        
+        // First, append any pinned quotes from other sites
+        this.appendPinnedQuotesFromOtherSites();
+        
+        // Get pinned quotes to check for duplicates
+        const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+        const pinnedQuotes = pinned.map(pin => pin.quote);
+        
+        // Filter out quotes that are already pinned
+        const newQuotes = quotes.filter(quoteData => {
+            const quoteText = quoteData.quote || quoteData;
+            return !pinnedQuotes.includes(quoteText);
+        });
+        
+        
+        // Then append the new quotes (excluding duplicates)
+        newQuotes.forEach((quoteData, index) => {
+            const quoteElement = this.createQuoteElement(quoteData, index, pageTitle, pageUrl);
+            this.quotesContainer.appendChild(quoteElement);
+        });
+
+        this.showResults();
+        // Save to local storage
+        this.saveSession(quotes, pageTitle, pageUrl);
+        
+        // Restore citation states for all quotes
+        this.restoreAllCitationStates();
+        
+        // Remove any previous expansion classes and add full expansion
+        const container = document.querySelector('.container');
+        container.classList.remove('medium-expanded');
+        container.classList.add('expanded');
+    }
+
+    createQuoteElement(quoteData, index, pageTitle, pageUrl) {
+        const quoteDiv = document.createElement('div');
+        quoteDiv.className = 'quote-item';
+        
+        const quoteText = quoteData.quote || quoteData;
+        const relevance = quoteData.relevance || 'Relevant to topic';
+        
+        quoteDiv.innerHTML = `
+            <div class="quote-pin" data-index="${index}">
                 <img src="../media/Pin.png" alt="Pin" style="width: 16px; height: 19px;">
             </div>
-            <div class="quote-text">"${o}"</div>
+            <div class="quote-text">"${quoteText}"</div>
             <div class="quote-actions">
-                <button class="action-btn copy-btn" data-quote="${o.replace(/"/g,"&quot;")}">
+                <button class="action-btn copy-btn" data-quote="${quoteText.replace(/"/g, '&quot;')}">
                     Copy Quote
                 </button>
-                <button class="action-btn generate-citation-btn" data-index="${e}" data-title="${i.replace(/"/g,"&quot;")}" data-url="${n.replace(/"/g,"&quot;")}">
+                <button class="action-btn generate-citation-btn" data-index="${index}" data-title="${pageTitle.replace(/"/g, '&quot;')}" data-url="${pageUrl.replace(/"/g, '&quot;')}">
                     Generate Citation
                 </button>
-                <div class="quote-help" data-help="${r.replace(/"/g,"&quot;")}">
+                <div class="quote-help" data-help="${relevance.replace(/"/g, '&quot;')}">
                     <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
                 </div>
             </div>
-            <div class="citation-display" id="citation-${e}" style="display: none;"></div>
-        `;let s=a.querySelector(".copy-btn"),l=a.querySelector(".generate-citation-btn"),c=a.querySelector(".quote-pin");return s.addEventListener("click",()=>{let t=s.getAttribute("data-quote");this.copyQuote(t)}),c.addEventListener("click",()=>{let t=parseInt(c.getAttribute("data-index"));this.togglePin(t,c)}),l.addEventListener("click",()=>{let t=parseInt(l.getAttribute("data-index")),e=l.getAttribute("data-title"),i=l.getAttribute("data-url"),n=document.getElementById(`citation-${t}`);n&&""!==n.innerHTML.trim()?this.toggleCitation(t):this.generateCitation(t,e,i)}),a}async generateCitation(t,e,i){let n,a;if("string"==typeof t&&t.startsWith("pinned-")){if(!(n=document.querySelector(`[data-pinned-id="${t}"]`)?.closest(".quote-item"))){console.error("Pinned quote element not found for ID:",t);return}a=n.querySelector(".quote-text").textContent.replace(/"/g,"")}else{if(!(n=document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${t}"]`)?.closest(".quote-item"))){console.error("Quote element not found for index:",t);return}a=n.querySelector(".quote-text").textContent.replace(/"/g,"")}let o=document.getElementById(`citation-${t}`),r=this.citationFormat.value,s=n.querySelector(".generate-citation-btn"),l=s.textContent;s.innerHTML=`
+            <div class="citation-display" id="citation-${index}" style="display: none;"></div>
+        `;
+        
+        // Add event listeners to the buttons
+        const copyBtn = quoteDiv.querySelector('.copy-btn');
+        const citationBtn = quoteDiv.querySelector('.generate-citation-btn');
+        const pinBtn = quoteDiv.querySelector('.quote-pin');
+        
+        copyBtn.addEventListener('click', () => {
+            const quote = copyBtn.getAttribute('data-quote');
+            this.copyQuote(quote);
+        });
+        
+        pinBtn.addEventListener('click', () => {
+            const index = parseInt(pinBtn.getAttribute('data-index'));
+            this.togglePin(index, pinBtn);
+        });
+        
+        citationBtn.addEventListener('click', () => {
+            const index = parseInt(citationBtn.getAttribute('data-index'));
+            const title = citationBtn.getAttribute('data-title');
+            const url = citationBtn.getAttribute('data-url');
+            
+            // Check if citation already exists
+            const citationDisplay = document.getElementById(`citation-${index}`);
+            if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
+                // Citation exists, toggle it
+                this.toggleCitation(index);
+            } else {
+                // No citation exists, generate new one
+                this.generateCitation(index, title, url);
+            }
+        });
+        
+        return quoteDiv;
+    }
+
+    async generateCitation(index, pageTitle, pageUrl) {
+        let quoteElement;
+        let quoteText;
+        
+        // Handle both regular quotes (numeric index) and pinned quotes (string ID)
+        if (typeof index === 'string' && index.startsWith('pinned-')) {
+            // For pinned quotes, find by data-pinned-id
+            quoteElement = document.querySelector(`[data-pinned-id="${index}"]`)?.closest('.quote-item');
+            if (!quoteElement) {
+                console.error('Pinned quote element not found for ID:', index);
+                return;
+            }
+            quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+        } else {
+            // For regular quotes, find by data-index attribute
+            quoteElement = document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${index}"]`)?.closest('.quote-item');
+            if (!quoteElement) {
+                console.error('Quote element not found for index:', index);
+                return;
+            }
+            quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+        }
+        
+        const citationDisplay = document.getElementById(`citation-${index}`);
+        const format = this.citationFormat.value;
+        const citationBtn = quoteElement.querySelector('.generate-citation-btn');
+
+        // Show loading state in the button
+        const originalText = citationBtn.textContent;
+        citationBtn.innerHTML = `
             <div class="loading-spinner"></div>
             Generating...
-        `,s.disabled=!0;try{let c=await fetch(`${this.serverUrl}/api/format-citation`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({quote:a,pageTitle:e,pageUrl:i,format:r})});if(c.ok){let d=await c.json();o.innerHTML=`
+        `;
+        citationBtn.disabled = true;
+
+        try {
+            const response = await fetch(`${this.serverUrl}/api/format-citation`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    quote: quoteText,
+                    pageTitle: pageTitle,
+                    pageUrl: pageUrl,
+                    format: format
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Create citation items without outer box
+                citationDisplay.innerHTML = `
                     <div class="citation-item">
-                        <div class="citation-text">${d.citation}</div>
-                        <button class="citation-copy-btn" data-citation="${d.citation.replace(/"/g,"&quot;")}">
+                        <div class="citation-text">${data.citation}</div>
+                        <button class="citation-copy-btn" data-citation="${data.citation.replace(/"/g, '&quot;')}">
                             Copy
                         </button>
                     </div>
-                    ${d.inTextCitation?`
+                    ${data.inTextCitation ? `
                         <div class="citation-divider"></div>
                         <div class="citation-item">
-                            <div class="citation-text">${d.inTextCitation.parenthetical||d.inTextCitation.narrative}</div>
-                            <button class="citation-copy-btn" data-citation="${(d.inTextCitation.parenthetical||d.inTextCitation.narrative).replace(/"/g,"&quot;")}">
+                            <div class="citation-text">${data.inTextCitation.parenthetical || data.inTextCitation.narrative}</div>
+                            <button class="citation-copy-btn" data-citation="${(data.inTextCitation.parenthetical || data.inTextCitation.narrative).replace(/"/g, '&quot;')}">
                                 Copy
                             </button>
                         </div>
-                    `:""}
-                `,o.style.display="block";let u=o.querySelectorAll(".citation-copy-btn");u.forEach(t=>{t.addEventListener("click",()=>{let e=t.getAttribute("data-citation");this.copyCitation(e)})}),this.updateQuoteCitationState(a,!0,!0,d),s.innerHTML="Hide Citation",s.disabled=!1}else throw Error(`Server error: ${c.status}`)}catch(p){console.error("Error generating citation:",p),o.innerHTML=`
+                    ` : ''}
+                `;
+                citationDisplay.style.display = 'block';
+                
+                // Add event listeners to copy buttons
+                const copyBtns = citationDisplay.querySelectorAll('.citation-copy-btn');
+                copyBtns.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const citation = btn.getAttribute('data-citation');
+                        this.copyCitation(citation);
+                    });
+                });
+                
+                // Update quote citation state (generated and visible)
+                this.updateQuoteCitationState(quoteText, true, true, data);
+                
+                // Change button to "Hide Citation"
+                citationBtn.innerHTML = 'Hide Citation';
+                citationBtn.disabled = false;
+            } else {
+                throw new Error(`Server error: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Error generating citation:', error);
+            citationDisplay.innerHTML = `
                 <div style="color: #dc2626; text-align: center; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;">
                     Error generating citation. Please try again.
                 </div>
-            `,o.style.display="block",s.innerHTML=l,s.disabled=!1}}updateAllCitations(){this.restoreCitations();let t=document.querySelectorAll(".citation-display");t.forEach(t=>{if("none"!==t.style.display){let e=t.closest(".quote-item");e.querySelector(".quote-text").textContent.replace(/"/g,"");let i=this.lastPageTitle||"Current Page",n=this.lastPageUrl||"Current URL";this.generateCitation(Array.from(e.parentNode.children).indexOf(e),i,n)}})}copyQuote(t){navigator.clipboard.writeText(t).then(()=>{}).catch(t=>{console.error("Failed to copy quote:",t)})}copyCitation(t){navigator.clipboard.writeText(t).then(()=>{}).catch(t=>{console.error("Failed to copy citation:",t)})}showTemporaryMessage(t){let e=document.createElement("div");e.style.cssText=`
+            `;
+            citationDisplay.style.display = 'block';
+            
+            // Reset button
+            citationBtn.innerHTML = originalText;
+            citationBtn.disabled = false;
+        }
+    }
+
+    updateAllCitations() {
+        // First try to restore existing citations for the new format
+        this.restoreCitations();
+        
+        // Then re-generate any that don't exist for the new format
+        const citations = document.querySelectorAll('.citation-display');
+        citations.forEach(citation => {
+            if (citation.style.display !== 'none') {
+                // Re-generate citation with new format
+                const quoteItem = citation.closest('.quote-item');
+                const quoteText = quoteItem.querySelector('.quote-text').textContent.replace(/"/g, '');
+                const pageTitle = this.lastPageTitle || 'Current Page';
+                const pageUrl = this.lastPageUrl || 'Current URL';
+                
+                this.generateCitation(Array.from(quoteItem.parentNode.children).indexOf(quoteItem), pageTitle, pageUrl);
+            }
+        });
+    }
+
+    copyQuote(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            // Quote copied silently
+        }).catch(err => {
+            console.error('Failed to copy quote:', err);
+        });
+    }
+
+    copyCitation(citation) {
+        navigator.clipboard.writeText(citation).then(() => {
+            // Citation copied silently
+        }).catch(err => {
+            console.error('Failed to copy citation:', err);
+        });
+    }
+
+    showTemporaryMessage(message) {
+        // Create temporary message element
+        const messageDiv = document.createElement('div');
+        messageDiv.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
@@ -76,39 +817,857 @@ class QuotelyPopup{constructor(){this.serverUrl="https://quotely-rmgh.onrender.c
             border-radius: 4px;
             font-size: 12px;
             z-index: 1000;
-        `,e.textContent=t,document.body.appendChild(e),setTimeout(()=>{e.remove()},2e3)}setLoading(t){this.findQuotesBtn.disabled=t,this.btnText.style.display=t?"none":"block",this.searchIcon.style.display=t?"none":"block",this.loadingSpinner.style.display=t?"block":"none"}showResults(){this.resultsSection.style.display="block"}hideResults(){this.resultsSection.style.display="none"}showError(t){this.errorMessage.textContent=t,this.errorMessage.style.display="block";let e=document.querySelector(".container");e.classList.remove("expanded"),e.classList.add("medium-expanded")}hideError(){this.errorMessage.style.display="none"}saveSession(t,e,i){try{let n={quotes:t,pageTitle:e,pageUrl:i,topic:this.topicInput.value.trim(),timestamp:Date.now()};localStorage.setItem(this.storageKey,JSON.stringify(n))}catch(a){console.error("Failed to save session:",a)}}restoreLastSession(){try{let t=localStorage.getItem("quotely_current_topic");t&&(this.topicInput.value=t);let e=localStorage.getItem(this.storageKey);if(!e)return;let i=JSON.parse(e);if(Date.now()-i.timestamp>864e5)return;!t&&i.topic&&(this.topicInput.value=i.topic),i.quotes&&i.quotes.length>0&&(this.lastPageTitle=i.pageTitle,this.lastPageUrl=i.pageUrl,this.displayQuotes(i.quotes,i.pageTitle,i.pageUrl))}catch(n){console.error("Failed to restore session:",n)}}checkPendingSegmentSelection(){try{let t=localStorage.getItem(this.segmentStateKey);if(!t)return;let e=JSON.parse(t);if(Date.now()-e.timestamp>36e5){localStorage.removeItem(this.segmentStateKey);return}e.topic&&(this.topicInput.value=e.topic),e.pageTitle&&(this.lastPageTitle=e.pageTitle),e.pageUrl&&(this.lastPageUrl=e.pageUrl),e.isPdf?this.showPdfSegmentSelector(e.pdfData,e.pdfUrl).then(async t=>{if(null!==t){this.setLoading(!0);try{let i=await fetch(`${this.serverUrl}/api/get-pdf-segment`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfUrl:e.pdfUrl,segmentIndex:t})});if(i.ok){let n=await i.json();this.continueWithSelectedSegment(n.content,e.topic)}else this.showError("Failed to retrieve PDF segment. Please try again."),this.setLoading(!1)}catch(a){console.error("Error retrieving PDF segment:",a),this.showError("Failed to retrieve PDF segment. Please try again."),this.setLoading(!1)}}}):this.showSegmentSelector(e.fullText,e.topic).then(t=>{t&&this.continueWithSelectedSegment(t,e.topic)})}catch(i){console.error("Failed to restore segment selection:",i),localStorage.removeItem(this.segmentStateKey)}}async continueWithSelectedSegment(t,e){try{this.setLoading(!0);let i={content:t,title:this.lastPageTitle||"Current Page",url:this.lastPageUrl||window.location.href};this.lastPageTitle=i.title,this.lastPageUrl=i.url;let n=await fetch(`${this.serverUrl}/api/find-quotes`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:e,pageContent:t,pageUrl:this.lastPageUrl,pageTitle:this.lastPageTitle,isOCR:!1})});if(!n.ok){if(413===n.status){this.showError("The page is too large to analyze. Try a simpler page or select text and paste it instead.");return}throw Error(`Server error: ${n.status}`)}let a=await n.json();a.quotes&&a.quotes.length>0?(this.lastPageTitle=a.pageTitle||this.lastPageTitle,this.lastPageUrl=a.pageUrl||this.lastPageUrl,this.displayQuotes(a.quotes,this.lastPageTitle,this.lastPageUrl)):this.showError("No relevant quotes found. Try a different topic or check if the page has relevant content.")}catch(o){console.error("Error finding quotes:",o),this.showError("Failed to find quotes. The server might be offline. Please try again later.")}finally{this.setLoading(!1)}}saveCitationToStorage(t,e,i,n,a,o=!0){try{let r=JSON.parse(localStorage.getItem(this.citationsKey)||"{}"),s=`${n}_${t}`;r[s]={data:e,pageTitle:i,pageUrl:n,format:a,quoteText:t,isVisible:o,timestamp:Date.now()},localStorage.setItem(this.citationsKey,JSON.stringify(r))}catch(l){console.error("Failed to save citation:",l)}}restoreCitations(){try{let t=JSON.parse(localStorage.getItem(this.citationsKey)||"{}"),e=this.lastPageUrl;if(!e)return;Object.keys(t).forEach(i=>{if(i.startsWith(`${e}_`)){let n=t[i],a=n.quoteText,o=n.format;o===this.citationFormat.value&&this.displayStoredCitationByQuote(a,n)}})}catch(i){console.error("Failed to restore citations:",i)}}displayStoredCitationByQuote(t,e){let i=document.querySelectorAll("#quotes-container .quote-item"),n=null,a=null;for(let o of i){let r=o.querySelector(".quote-text").textContent.replace(/"/g,"");if(r===t){n=o;let s=o.querySelector(".quote-pin");s&&(a=s.getAttribute("data-index"));break}}if(!n||!a)return;let l=document.getElementById(`citation-${a}`);if(!l||""!==l.innerHTML.trim())return;l.innerHTML=`
+        `;
+        messageDiv.textContent = message;
+        document.body.appendChild(messageDiv);
+        
+        setTimeout(() => {
+            messageDiv.remove();
+        }, 2000);
+    }
+
+    setLoading(loading) {
+        this.findQuotesBtn.disabled = loading;
+        this.btnText.style.display = loading ? 'none' : 'block';
+        this.searchIcon.style.display = loading ? 'none' : 'block';
+        this.loadingSpinner.style.display = loading ? 'block' : 'none';
+    }
+
+    showResults() {
+        this.resultsSection.style.display = 'block';
+    }
+
+    hideResults() {
+        this.resultsSection.style.display = 'none';
+    }
+
+    showError(message) {
+        this.errorMessage.textContent = message;
+        this.errorMessage.style.display = 'block';
+        
+        // Remove any previous expansion classes and add medium expansion
+        const container = document.querySelector('.container');
+        container.classList.remove('expanded');
+        container.classList.add('medium-expanded');
+    }
+
+    hideError() {
+        this.errorMessage.style.display = 'none';
+    }
+
+    saveSession(quotes, pageTitle, pageUrl) {
+        try {
+            const sessionData = {
+                quotes: quotes,
+                pageTitle: pageTitle,
+                pageUrl: pageUrl,
+                topic: this.topicInput.value.trim(),
+                timestamp: Date.now()
+            };
+            localStorage.setItem(this.storageKey, JSON.stringify(sessionData));
+        } catch (error) {
+            console.error('Failed to save session:', error);
+        }
+    }
+
+    restoreLastSession() {
+        try {
+            // First check for current input text (most recent)
+            const currentTopic = localStorage.getItem('quotely_current_topic');
+            if (currentTopic) {
+                this.topicInput.value = currentTopic;
+            }
+            
+            const saved = localStorage.getItem(this.storageKey);
+            if (!saved) return;
+            
+            const sessionData = JSON.parse(saved);
+            // Only restore if less than 24 hours old
+            if (Date.now() - sessionData.timestamp > 24 * 60 * 60 * 1000) return;
+            
+            // Restore topic from session if no current topic
+            if (!currentTopic && sessionData.topic) {
+                this.topicInput.value = sessionData.topic;
+            }
+            
+            // Restore quotes if available
+            if (sessionData.quotes && sessionData.quotes.length > 0) {
+                this.lastPageTitle = sessionData.pageTitle;
+                this.lastPageUrl = sessionData.pageUrl;
+                this.displayQuotes(sessionData.quotes, sessionData.pageTitle, sessionData.pageUrl);
+            }
+        } catch (error) {
+            console.error('Failed to restore session:', error);
+        }
+    }
+
+    checkPendingSegmentSelection() {
+        try {
+            const segmentState = localStorage.getItem(this.segmentStateKey);
+            if (!segmentState) return;
+            
+            const state = JSON.parse(segmentState);
+            
+            // Only restore if less than 1 hour old (segment selection shouldn't persist too long)
+            if (Date.now() - state.timestamp > 60 * 60 * 1000) {
+                localStorage.removeItem(this.segmentStateKey);
+                return;
+            }
+            
+            // Restore topic and page info
+            if (state.topic) {
+                this.topicInput.value = state.topic;
+            }
+            if (state.pageTitle) {
+                this.lastPageTitle = state.pageTitle;
+            }
+            if (state.pageUrl) {
+                this.lastPageUrl = state.pageUrl;
+            }
+            
+            // Restore segment selector based on type
+            
+            if (state.isPdf) {
+                // Restore PDF segment selector
+                this.showPdfSegmentSelector(state.pdfData, state.pdfUrl).then(async selectedSegmentIndex => {
+                    if (selectedSegmentIndex !== null) {
+                        // Request the specific segment from server
+                        this.setLoading(true);
+                        try {
+                            const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    pdfUrl: state.pdfUrl,
+                                    segmentIndex: selectedSegmentIndex
+                                })
+                            });
+                            
+                            if (segmentResponse.ok) {
+                                const segmentData = await segmentResponse.json();
+                                this.continueWithSelectedSegment(segmentData.content, state.topic);
+                            } else {
+                                this.showError('Failed to retrieve PDF segment. Please try again.');
+                                this.setLoading(false);
+                            }
+                        } catch (error) {
+                            console.error('Error retrieving PDF segment:', error);
+                            this.showError('Failed to retrieve PDF segment. Please try again.');
+                            this.setLoading(false);
+                        }
+                    }
+                });
+            } else {
+                // Restore HTML segment selector
+                this.showSegmentSelector(state.fullText, state.topic).then(selectedSegment => {
+                    if (selectedSegment) {
+                        // User selected a segment, continue with quote finding
+                        this.continueWithSelectedSegment(selectedSegment, state.topic);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Failed to restore segment selection:', error);
+            localStorage.removeItem(this.segmentStateKey);
+        }
+    }
+
+    async continueWithSelectedSegment(content, topic) {
+        try {
+            this.setLoading(true);
+            
+            // Create pageData object with the selected segment
+            const pageData = {
+                content: content,
+                title: this.lastPageTitle || 'Current Page',
+                url: this.lastPageUrl || window.location.href
+            };
+            
+            this.lastPageTitle = pageData.title;
+            this.lastPageUrl = pageData.url;
+            
+            // Send to server for analysis
+            const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    topic: topic,
+                    pageContent: content,
+                    pageUrl: this.lastPageUrl,
+                    pageTitle: this.lastPageTitle,
+                    isOCR: false // Segments are from regular extraction, not OCR
+                })
+            });
+
+            if (!response.ok) {
+                if (response.status === 413) {
+                    this.showError('The page is too large to analyze. Try a simpler page or select text and paste it instead.');
+                    return;
+                }
+                throw new Error(`Server error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            
+            if (data.quotes && data.quotes.length > 0) {
+                this.lastPageTitle = data.pageTitle || this.lastPageTitle;
+                this.lastPageUrl = data.pageUrl || this.lastPageUrl;
+                this.displayQuotes(data.quotes, this.lastPageTitle, this.lastPageUrl);
+            } else {
+                this.showError('No relevant quotes found. Try a different topic or check if the page has relevant content.');
+            }
+
+        } catch (error) {
+            console.error('Error finding quotes:', error);
+            this.showError('Failed to find quotes. The server might be offline. Please try again later.');
+        } finally {
+            this.setLoading(false);
+        }
+    }
+
+    saveCitationToStorage(quoteText, citationData, pageTitle, pageUrl, format, isVisible = true) {
+        try {
+            const citations = JSON.parse(localStorage.getItem(this.citationsKey) || '{}');
+            // Use quote text as key, with page URL for uniqueness
+            const citationKey = `${pageUrl}_${quoteText}`;
+            
+            
+            citations[citationKey] = {
+                data: citationData,
+                pageTitle: pageTitle,
+                pageUrl: pageUrl,
+                format: format,
+                quoteText: quoteText,
+                isVisible: isVisible,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem(this.citationsKey, JSON.stringify(citations));
+
+        } catch (error) {
+            console.error('Failed to save citation:', error);
+        }
+    }
+
+    restoreCitations() {
+        try {
+            const citations = JSON.parse(localStorage.getItem(this.citationsKey) || '{}');
+            const currentPageUrl = this.lastPageUrl;
+            
+            if (!currentPageUrl) return;
+            
+            // Find citations for current page
+            Object.keys(citations).forEach(key => {
+                if (key.startsWith(`${currentPageUrl}_`)) {
+                    const citationInfo = citations[key];
+                    const quoteText = citationInfo.quoteText;
+                    const format = citationInfo.format;
+                    
+                    // Only restore if format matches current selection
+                    if (format === this.citationFormat.value) {
+
+                        this.displayStoredCitationByQuote(quoteText, citationInfo);
+                    } else {
+
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Failed to restore citations:', error);
+        }
+    }
+
+    displayStoredCitationByQuote(quoteText, citationState) {
+        // Find the quote element by text content
+        const quoteElements = document.querySelectorAll('#quotes-container .quote-item');
+        let targetQuote = null;
+        let targetIndex = null;
+        
+        for (const quoteElement of quoteElements) {
+            const elementQuoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+            if (elementQuoteText === quoteText) {
+                targetQuote = quoteElement;
+                // Get the data-index from the pin element
+                const pinElement = quoteElement.querySelector('.quote-pin');
+                if (pinElement) {
+                    targetIndex = pinElement.getAttribute('data-index');
+                }
+                break;
+            }
+        }
+        
+        if (!targetQuote || !targetIndex) {
+
+            return;
+        }
+        
+        const citationDisplay = document.getElementById(`citation-${targetIndex}`);
+        if (!citationDisplay) return;
+        
+        // Check if citation is already displayed to avoid duplicate restoration
+        if (citationDisplay.innerHTML.trim() !== '') {
+
+            return;
+        }
+        
+        // Create single rounded box with both citations and copy buttons
+        citationDisplay.innerHTML = `
             <div class="citation-box">
                 <div class="citation-item">
-                    <div class="citation-text">${e.citationData.citation}</div>
-                    <button class="citation-copy-btn" data-citation="${e.citationData.citation.replace(/"/g,"&quot;")}">
+                    <div class="citation-text">${citationState.citationData.citation}</div>
+                    <button class="citation-copy-btn" data-citation="${citationState.citationData.citation.replace(/"/g, '&quot;')}">
                         Copy
                     </button>
                 </div>
-                ${e.citationData.inTextCitation?`
+                ${citationState.citationData.inTextCitation ? `
                     <div class="citation-divider"></div>
                     <div class="citation-item">
-                        <div class="citation-text">${e.citationData.inTextCitation.parenthetical||e.citationData.inTextCitation.narrative}</div>
-                        <button class="citation-copy-btn" data-citation="${(e.citationData.inTextCitation.parenthetical||e.citationData.inTextCitation.narrative).replace(/"/g,"&quot;")}">
+                        <div class="citation-text">${citationState.citationData.inTextCitation.parenthetical || citationState.citationData.inTextCitation.narrative}</div>
+                        <button class="citation-copy-btn" data-citation="${(citationState.citationData.inTextCitation.parenthetical || citationState.citationData.inTextCitation.narrative).replace(/"/g, '&quot;')}">
                             Copy
                         </button>
                     </div>
-                `:""}
+                ` : ''}
             </div>
-        `,l.style.display=e.isVisible?"block":"none";let c=n.querySelector(".generate-citation-btn");c&&(c.innerHTML=e.isVisible?"Hide Citation":"Show Citation");let d=l.querySelectorAll(".citation-copy-btn");d.forEach(t=>{t.addEventListener("click",()=>{let e=t.getAttribute("data-citation");this.copyCitation(e)})})}clearStoredCitations(){try{localStorage.removeItem(this.citationsKey)}catch(t){console.error("Failed to clear stored citations:",t)}}clearStoredPins(){try{localStorage.removeItem("quotely_pinned")}catch(t){console.error("Failed to clear stored pins:",t)}}appendPinnedQuotesFromOtherSites(){try{let t=JSON.parse(localStorage.getItem("quotely_pinned")||"[]");if(this.lastPageUrl,0===t.length)return;t.forEach((t,e)=>{let i=this.createPinnedQuoteElement(t,`pinned-${e}`);this.quotesContainer.appendChild(i)})}catch(e){console.error("Failed to append pinned quotes from other sites:",e)}}createPinnedQuoteElement(t,e){let i=document.createElement("div");i.className="quote-item pinned",i.setAttribute("data-pinned-id",e),i.innerHTML=`
-            <div class="quote-pin" data-pinned-id="${e}" style="opacity: 1;">
+        `;
+        
+        // Use stored visibility state
+        citationDisplay.style.display = citationState.isVisible ? 'block' : 'none';
+        
+        // Update the generate citation button based on visibility state
+        const citationBtn = targetQuote.querySelector('.generate-citation-btn');
+        if (citationBtn) {
+            citationBtn.innerHTML = citationState.isVisible ? 'Hide Citation' : 'Show Citation';
+        }
+        
+        // Add event listeners to copy buttons
+        const copyBtns = citationDisplay.querySelectorAll('.citation-copy-btn');
+        copyBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const citation = btn.getAttribute('data-citation');
+                this.copyCitation(citation);
+            });
+        });
+    }
+
+    clearStoredCitations() {
+        try {
+            localStorage.removeItem(this.citationsKey);
+        } catch (error) {
+            console.error('Failed to clear stored citations:', error);
+        }
+    }
+
+    clearStoredPins() {
+        try {
+            localStorage.removeItem('quotely_pinned');
+        } catch (error) {
+            console.error('Failed to clear stored pins:', error);
+        }
+    }
+
+    appendPinnedQuotesFromOtherSites() {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            const currentUrl = this.lastPageUrl;
+            
+            
+            // Show ALL pinned quotes (from all sites, including current site)
+            
+            if (pinned.length === 0) {
+                return;
+            }
+            
+            // Create quote elements for ALL pinned quotes
+            pinned.forEach((pinnedQuote, index) => {
+                const quoteElement = this.createPinnedQuoteElement(pinnedQuote, `pinned-${index}`);
+                this.quotesContainer.appendChild(quoteElement);
+            });
+            
+        } catch (error) {
+            console.error('Failed to append pinned quotes from other sites:', error);
+        }
+    }
+
+    createPinnedQuoteElement(pinnedQuote, uniqueId) {
+        const quoteDiv = document.createElement('div');
+        quoteDiv.className = 'quote-item pinned';
+        quoteDiv.setAttribute('data-pinned-id', uniqueId);
+        
+        quoteDiv.innerHTML = `
+            <div class="quote-pin" data-pinned-id="${uniqueId}" style="opacity: 1;">
                 <img src="../media/Pin.png" alt="Pin" style="width: 16px; height: 19px;">
             </div>
-            <div class="quote-text">"${t.quote}"</div>
+            <div class="quote-text">"${pinnedQuote.quote}"</div>
             <div class="quote-actions">
-                <button class="action-btn copy-btn" data-quote="${t.quote.replace(/"/g,"&quot;")}">
+                <button class="action-btn copy-btn" data-quote="${pinnedQuote.quote.replace(/"/g, '&quot;')}">
                     Copy Quote
                 </button>
-                <button class="action-btn generate-citation-btn" data-pinned-id="${e}" data-title="${t.pageTitle.replace(/"/g,"&quot;")}" data-url="${t.url.replace(/"/g,"&quot;")}">
+                <button class="action-btn generate-citation-btn" data-pinned-id="${uniqueId}" data-title="${pinnedQuote.pageTitle.replace(/"/g, '&quot;')}" data-url="${pinnedQuote.url.replace(/"/g, '&quot;')}">
                     Generate Citation
                 </button>
-                <div class="quote-help" data-help="Pinned from ${t.pageTitle}">
+                <div class="quote-help" data-help="Pinned from ${pinnedQuote.pageTitle}">
                     <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
                 </div>
             </div>
-            <div class="citation-display" id="citation-${e}" style="display: none;"></div>
-        `;let n=i.querySelector(".copy-btn"),a=i.querySelector(".generate-citation-btn"),o=i.querySelector(".quote-pin");if(n.addEventListener("click",()=>{let t=n.getAttribute("data-quote");this.copyQuote(t),n.classList.add("pop-animation"),setTimeout(()=>{n.classList.remove("pop-animation")},300)}),o.addEventListener("click",()=>{this.removePinnedQuote(e,t.quote)}),a.addEventListener("click",()=>{let t=a.getAttribute("data-pinned-id"),e=a.getAttribute("data-title"),i=a.getAttribute("data-url"),n=document.getElementById(`citation-${t}`);n&&""!==n.innerHTML.trim()?this.toggleCitation(t):this.generateCitation(t,e,i)}),t.citation){let r=i.querySelector(`#citation-${e}`);if(r){r.innerHTML=t.citation;let s=!1!==t.citationVisible;r.style.display=s?"block":"none",a.innerHTML=s?"Hide Citation":"Generate Citation"}}return i}removePinnedQuote(t,e){try{let i=document.querySelector(`[data-pinned-id="${t}"]`);i&&i.remove();let n=JSON.parse(localStorage.getItem("quotely_pinned")||"[]"),a=n.filter(t=>t.quote!==e);localStorage.setItem("quotely_pinned",JSON.stringify(a))}catch(o){console.error("Failed to remove pinned quote:",o)}}checkAndRestorePins(){try{JSON.parse(localStorage.getItem("quotely_pinned")||"[]");let t=document.querySelectorAll("#quotes-container .quote-item");t.length>0&&this.lastPageUrl&&this.restorePinnedState()}catch(e){console.error("Failed to check and restore pins:",e)}}updatePinnedStorage(){try{JSON.parse(localStorage.getItem("quotely_pinned")||"[]");let t=document.querySelectorAll("#quotes-container .quote-item"),e=[];t.forEach(t=>{if(t.classList.contains("pinned")){let i=t.querySelector(".quote-pin");if(i){let n=parseInt(i.getAttribute("data-index")),a=t.querySelector(".quote-text").textContent.replace(/"/g,""),o=document.getElementById(`citation-${n}`),r=o&&""!==o.innerHTML.trim(),s={index:n,quote:a,url:this.lastPageUrl,pageTitle:this.lastPageTitle,citation:r?o.innerHTML:null,citationVisible:r&&"none"!==o.style.display,timestamp:Date.now()};e.push(s)}}}),localStorage.setItem("quotely_pinned",JSON.stringify(e))}catch(i){console.error("Failed to update pinned storage:",i)}}toggleCitation(t){let e=document.getElementById(`citation-${t}`),i,n;if("string"==typeof t&&t.startsWith("pinned-")){i=document.querySelector(`[data-pinned-id="${t}"].generate-citation-btn`);let a=i?.closest(".quote-item");a&&(n=a.querySelector(".quote-text").textContent.replace(/"/g,""))}else{let o=document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${t}"]`)?.closest(".quote-item");o&&(i=o.querySelector(".generate-citation-btn"),n=o.querySelector(".quote-text").textContent.replace(/"/g,""))}"none"===e.style.display||""===e.style.display?(e.style.display="block",i.innerHTML="Hide Citation",this.updateQuoteCitationState(n,!0,!0)):(e.style.display="none",i.innerHTML="Show Citation",this.updateQuoteCitationState(n,!0,!1))}getQuotesList(){try{return JSON.parse(localStorage.getItem(this.quotesKey)||"[]")}catch(t){return console.error("Failed to get quotes list:",t),[]}}saveQuotesList(t){try{localStorage.setItem(this.quotesKey,JSON.stringify(t))}catch(e){console.error("Failed to save quotes list:",e)}}updateQuoteCitationState(t,e,i,n=null){try{let a=this.getQuotesList(),o=this.lastPageUrl;if(!o)return;let r=a.find(e=>e.quoteText===t&&e.pageUrl===o);r||(r={quoteText:t,pageUrl:o,pageTitle:this.lastPageTitle,hasCitation:!1,isVisible:!1,citationData:null,timestamp:Date.now()},a.push(r)),r.hasCitation=e,r.isVisible=i,n&&(r.citationData=n),r.timestamp=Date.now(),this.saveQuotesList(a)}catch(s){console.error("Failed to update quote citation state:",s)}}getQuoteCitationState(t){try{let e=this.getQuotesList(),i=this.lastPageUrl;if(!i)return{hasCitation:!1,isVisible:!1,citationData:null};let n=e.find(e=>e.quoteText===t&&e.pageUrl===i);if(n)return{hasCitation:n.hasCitation||!1,isVisible:n.isVisible||!1,citationData:n.citationData||null};return{hasCitation:!1,isVisible:!1,citationData:null}}catch(a){return console.error("Failed to get quote citation state:",a),{hasCitation:!1,isVisible:!1,citationData:null}}}clearCurrentPageQuotes(){try{let t=this.getQuotesList(),e=this.lastPageUrl;if(!e)return;let i=t.filter(t=>t.pageUrl!==e);this.saveQuotesList(i)}catch(n){console.error("Failed to clear current page quotes:",n)}}restoreAllCitationStates(){try{let t=document.querySelectorAll("#quotes-container .quote-item");t.forEach(t=>{let e=t.querySelector(".quote-text").textContent.replace(/"/g,""),i=this.getQuoteCitationState(e);i.hasCitation&&this.displayStoredCitationByQuote(e,i)})}catch(e){console.error("Failed to restore citation states:",e)}}togglePin(t,e){let i=e.closest(".quote-item"),n=i.classList.contains("pinned");n?(i.classList.remove("pinned"),e.style.opacity="0.5",this.removeFromPinned(t)):(i.classList.add("pinned"),e.style.opacity="1",this.addToPinned(t)),this.reorderQuotes(),this.updatePinnedStorage()}addToPinned(t){try{let e=JSON.parse(localStorage.getItem("quotely_pinned")||"[]"),i=document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${t}"]`)?.closest(".quote-item");if(!i)return;let n=i.querySelector(".quote-text").textContent.replace(/"/g,""),a=document.getElementById(`citation-${t}`),o=a&&""!==a.innerHTML.trim(),r={index:t,quote:n,url:this.lastPageUrl,pageTitle:this.lastPageTitle,citation:o?a.innerHTML:null,citationVisible:o&&"none"!==a.style.display,timestamp:Date.now()},s=e.find(t=>t.quote===n);s||(e.push(r),localStorage.setItem("quotely_pinned",JSON.stringify(e)))}catch(l){console.error("Failed to pin quote:",l)}}removeFromPinned(t){try{let e=JSON.parse(localStorage.getItem("quotely_pinned")||"[]"),i=document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${t}"]`)?.closest(".quote-item");if(!i)return;let n=i.querySelector(".quote-text").textContent.replace(/"/g,""),a=e.filter(t=>t.quote!==n);localStorage.setItem("quotely_pinned",JSON.stringify(a))}catch(o){console.error("Failed to unpin quote:",o)}}reorderQuotes(){let t=document.getElementById("quotes-container"),e=Array.from(t.children),i=JSON.parse(localStorage.getItem("quotely_pinned")||"[]");e.sort((t,e)=>{let n=parseInt(t.querySelector(".quote-pin").getAttribute("data-index")),a=parseInt(e.querySelector(".quote-pin").getAttribute("data-index")),o=t.querySelector(".quote-text").textContent.replace(/"/g,""),r=e.querySelector(".quote-text").textContent.replace(/"/g,""),s=i.some(t=>t.quote===o),l=i.some(t=>t.quote===r);return s&&!l?-1:!s&&l?1:n-a}),e.forEach(e=>t.appendChild(e)),setTimeout(()=>{this.restoreCitations()},100)}restorePinnedState(){try{let t=JSON.parse(localStorage.getItem("quotely_pinned")||"[]");if(0===t.length)return;let e=document.querySelectorAll("#quotes-container .quote-item:not([data-pinned-id])");if(0===e.length)return;let i=0;e.forEach((e,n)=>{let a=e.querySelector(".quote-pin");if(a){let o=parseInt(a.getAttribute("data-index")),r=e.querySelector(".quote-text").textContent.replace(/"/g,""),s=t.find(t=>t.quote===r);if(s){e.classList.add("pinned"),a.style.opacity="1",i++;let l=document.getElementById(`citation-${o}`);if(s.citation&&l){l.innerHTML=s.citation;let c=!1!==s.citationVisible;l.style.display=c?"block":"none";let d=e.querySelector(".generate-citation-btn");d&&(d.innerHTML=c?"Hide Citation":"Generate Citation")}}}}),this.reorderQuotes(),this.restoreCitations()}catch(n){console.error("Failed to restore pinned state:",n)}}}document.addEventListener("DOMContentLoaded",()=>{window.quotelyPopup=new QuotelyPopup});
+            <div class="citation-display" id="citation-${uniqueId}" style="display: none;"></div>
+        `;
+
+        // Add event listeners
+        const copyBtn = quoteDiv.querySelector('.copy-btn');
+        const citationBtn = quoteDiv.querySelector('.generate-citation-btn');
+        const pinBtn = quoteDiv.querySelector('.quote-pin');
+        
+        copyBtn.addEventListener('click', () => {
+            const quote = copyBtn.getAttribute('data-quote');
+            this.copyQuote(quote);
+            
+            // Add pop animation
+            copyBtn.classList.add('pop-animation');
+            setTimeout(() => {
+                copyBtn.classList.remove('pop-animation');
+            }, 300);
+        });
+        
+        pinBtn.addEventListener('click', () => {
+            this.removePinnedQuote(uniqueId, pinnedQuote.quote);
+        });
+        
+        citationBtn.addEventListener('click', () => {
+            const pinnedId = citationBtn.getAttribute('data-pinned-id');
+            const title = citationBtn.getAttribute('data-title');
+            const url = citationBtn.getAttribute('data-url');
+            
+            // Check if citation already exists
+            const citationDisplay = document.getElementById(`citation-${pinnedId}`);
+            if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
+                // Citation exists, toggle it
+                this.toggleCitation(pinnedId);
+            } else {
+                // No citation exists, generate new one
+                this.generateCitation(pinnedId, title, url);
+            }
+        });
+        
+        // Restore citation if it exists
+        if (pinnedQuote.citation) {
+            const citationDisplay = quoteDiv.querySelector(`#citation-${uniqueId}`);
+            if (citationDisplay) {
+                citationDisplay.innerHTML = pinnedQuote.citation;
+                // Use stored visibility state, default to hidden if not specified
+                const isVisible = pinnedQuote.citationVisible !== false;
+                citationDisplay.style.display = isVisible ? 'block' : 'none';
+                citationBtn.innerHTML = isVisible ? 'Hide Citation' : 'Generate Citation';
+            }
+        }
+        
+        return quoteDiv;
+    }
+
+    removePinnedQuote(uniqueId, quoteText) {
+        try {
+            // Remove from DOM
+            const quoteElement = document.querySelector(`[data-pinned-id="${uniqueId}"]`);
+            if (quoteElement) {
+                quoteElement.remove();
+            }
+            
+            // Remove from storage
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            const updatedPinned = pinned.filter(pin => pin.quote !== quoteText);
+            localStorage.setItem('quotely_pinned', JSON.stringify(updatedPinned));
+            
+        } catch (error) {
+            console.error('Failed to remove pinned quote:', error);
+        }
+    }
+
+    checkAndRestorePins() {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            
+            // If we have quotes displayed, try to restore pins
+            const quoteElements = document.querySelectorAll('#quotes-container .quote-item');
+            if (quoteElements.length > 0 && this.lastPageUrl) {
+                this.restorePinnedState();
+            } else {
+            }
+        } catch (error) {
+            console.error('Failed to check and restore pins:', error);
+        }
+    }
+
+    updatePinnedStorage() {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            
+            // Get all currently pinned quotes with full data
+            const quoteElements = document.querySelectorAll('#quotes-container .quote-item');
+            const currentlyPinned = [];
+            
+            quoteElements.forEach((quoteElement) => {
+                if (quoteElement.classList.contains('pinned')) {
+                    const pinElement = quoteElement.querySelector('.quote-pin');
+                    if (pinElement) {
+                        const index = parseInt(pinElement.getAttribute('data-index'));
+                        const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+                        const citationDisplay = document.getElementById(`citation-${index}`);
+                        const hasCitation = citationDisplay && citationDisplay.innerHTML.trim() !== '';
+                        
+                        const quoteData = {
+                            index: index,
+                            quote: quoteText,
+                            url: this.lastPageUrl,
+                            pageTitle: this.lastPageTitle,
+                            citation: hasCitation ? citationDisplay.innerHTML : null,
+                            citationVisible: hasCitation && citationDisplay.style.display !== 'none',
+                            timestamp: Date.now()
+                        };
+                        
+                        currentlyPinned.push(quoteData);
+                    }
+                }
+            });
+            
+            // Update storage with current state (universal)
+            localStorage.setItem('quotely_pinned', JSON.stringify(currentlyPinned));
+            
+        } catch (error) {
+            console.error('Failed to update pinned storage:', error);
+        }
+    }
+
+
+    toggleCitation(index) {
+        const citationDisplay = document.getElementById(`citation-${index}`);
+        
+        // Handle both regular quotes (numeric index) and pinned quotes (string ID)
+        let citationBtn;
+        let quoteText;
+        if (typeof index === 'string' && index.startsWith('pinned-')) {
+            // For pinned quotes, find the button within the quote with the matching data-pinned-id
+            citationBtn = document.querySelector(`[data-pinned-id="${index}"].generate-citation-btn`);
+            const quoteElement = citationBtn?.closest('.quote-item');
+            if (quoteElement) {
+                quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+            }
+        } else {
+            // For regular quotes, find by data-index attribute
+            const targetQuote = document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${index}"]`)?.closest('.quote-item');
+            if (targetQuote) {
+                citationBtn = targetQuote.querySelector('.generate-citation-btn');
+                quoteText = targetQuote.querySelector('.quote-text').textContent.replace(/"/g, '');
+            }
+        }
+        
+        if (citationDisplay.style.display === 'none' || citationDisplay.style.display === '') {
+            citationDisplay.style.display = 'block';
+            citationBtn.innerHTML = 'Hide Citation';
+            
+            // Update quote citation state (show citation)
+            this.updateQuoteCitationState(quoteText, true, true);
+        } else {
+            citationDisplay.style.display = 'none';
+            citationBtn.innerHTML = 'Show Citation';
+            
+            // Update quote citation state (hide citation)
+            this.updateQuoteCitationState(quoteText, true, false);
+        }
+    }
+
+    // Unified quote management system
+    getQuotesList() {
+        try {
+            return JSON.parse(localStorage.getItem(this.quotesKey) || '[]');
+        } catch (error) {
+            console.error('Failed to get quotes list:', error);
+            return [];
+        }
+    }
+
+    saveQuotesList(quotes) {
+        try {
+            localStorage.setItem(this.quotesKey, JSON.stringify(quotes));
+        } catch (error) {
+            console.error('Failed to save quotes list:', error);
+        }
+    }
+
+    updateQuoteCitationState(quoteText, hasCitation, isVisible, citationData = null) {
+        try {
+            const quotes = this.getQuotesList();
+            const currentPageUrl = this.lastPageUrl;
+            
+            if (!currentPageUrl) return;
+            
+            // Find or create quote entry
+            let quoteEntry = quotes.find(q => q.quoteText === quoteText && q.pageUrl === currentPageUrl);
+            
+            if (!quoteEntry) {
+                quoteEntry = {
+                    quoteText: quoteText,
+                    pageUrl: currentPageUrl,
+                    pageTitle: this.lastPageTitle,
+                    hasCitation: false,
+                    isVisible: false,
+                    citationData: null,
+                    timestamp: Date.now()
+                };
+                quotes.push(quoteEntry);
+            }
+            
+            // Update the entry
+            quoteEntry.hasCitation = hasCitation;
+            quoteEntry.isVisible = isVisible;
+            if (citationData) {
+                quoteEntry.citationData = citationData;
+            }
+            quoteEntry.timestamp = Date.now();
+            
+            this.saveQuotesList(quotes);
+
+        } catch (error) {
+            console.error('Failed to update quote citation state:', error);
+        }
+    }
+
+    getQuoteCitationState(quoteText) {
+        try {
+            const quotes = this.getQuotesList();
+            const currentPageUrl = this.lastPageUrl;
+            
+            if (!currentPageUrl) return { hasCitation: false, isVisible: false, citationData: null };
+            
+            const quoteEntry = quotes.find(q => q.quoteText === quoteText && q.pageUrl === currentPageUrl);
+            
+            if (quoteEntry) {
+                return {
+                    hasCitation: quoteEntry.hasCitation || false,
+                    isVisible: quoteEntry.isVisible || false,
+                    citationData: quoteEntry.citationData || null
+                };
+            }
+            
+            return { hasCitation: false, isVisible: false, citationData: null };
+        } catch (error) {
+            console.error('Failed to get quote citation state:', error);
+            return { hasCitation: false, isVisible: false, citationData: null };
+        }
+    }
+
+    clearCurrentPageQuotes() {
+        try {
+            const quotes = this.getQuotesList();
+            const currentPageUrl = this.lastPageUrl;
+            
+            if (!currentPageUrl) return;
+            
+            // Remove all quotes for current page (keep pinned quotes from other pages)
+            const filteredQuotes = quotes.filter(q => q.pageUrl !== currentPageUrl);
+            this.saveQuotesList(filteredQuotes);
+
+        } catch (error) {
+            console.error('Failed to clear current page quotes:', error);
+        }
+    }
+
+    restoreAllCitationStates() {
+        try {
+            const quoteElements = document.querySelectorAll('#quotes-container .quote-item');
+            
+            quoteElements.forEach(quoteElement => {
+                const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+                const citationState = this.getQuoteCitationState(quoteText);
+                
+                if (citationState.hasCitation) {
+                    // Restore the citation display
+                    this.displayStoredCitationByQuote(quoteText, citationState);
+                }
+            });
+ 
+        } catch (error) {
+            console.error('Failed to restore citation states:', error);
+        }
+    }
+
+    togglePin(index, pinElement) {
+        const quoteElement = pinElement.closest('.quote-item');
+        const isPinned = quoteElement.classList.contains('pinned');
+        
+        if (isPinned) {
+            // Unpin
+            quoteElement.classList.remove('pinned');
+            pinElement.style.opacity = '0.5';
+            this.removeFromPinned(index);
+        } else {
+            // Pin
+            quoteElement.classList.add('pinned');
+            pinElement.style.opacity = '1';
+            this.addToPinned(index);
+        }
+        
+        // Reorder quotes with pinned ones at top
+        this.reorderQuotes();
+        
+        // Update storage immediately after any pin change
+        this.updatePinnedStorage();
+    }
+
+    addToPinned(index) {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            
+            // Get the complete quote data
+            const quoteElement = document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${index}"]`)?.closest('.quote-item');
+            if (!quoteElement) {
+                return;
+            }
+            
+            const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+            const citationDisplay = document.getElementById(`citation-${index}`);
+            const hasCitation = citationDisplay && citationDisplay.innerHTML.trim() !== '';
+            
+            const quoteData = {
+                index: index,
+                quote: quoteText,
+                url: this.lastPageUrl,
+                pageTitle: this.lastPageTitle,
+                citation: hasCitation ? citationDisplay.innerHTML : null,
+                citationVisible: hasCitation && citationDisplay.style.display !== 'none',
+                timestamp: Date.now()
+            };
+            
+            // Check if this quote is already pinned (by quote text)
+            const existingPin = pinned.find(pin => pin.quote === quoteText);
+            
+            if (!existingPin) {
+                pinned.push(quoteData);
+                localStorage.setItem('quotely_pinned', JSON.stringify(pinned));
+            }
+        } catch (error) {
+            console.error('Failed to pin quote:', error);
+        }
+    }
+
+    removeFromPinned(index) {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            
+            // Get the quote text to find the pin to remove
+            const quoteElement = document.querySelector(`#quotes-container .quote-item .quote-pin[data-index="${index}"]`)?.closest('.quote-item');
+            if (!quoteElement) {
+                return;
+            }
+            
+            const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+            
+            // Remove the pin by quote text
+            const updatedPinned = pinned.filter(pin => pin.quote !== quoteText);
+            localStorage.setItem('quotely_pinned', JSON.stringify(updatedPinned));
+        } catch (error) {
+            console.error('Failed to unpin quote:', error);
+        }
+    }
+
+    reorderQuotes() {
+        const container = document.getElementById('quotes-container');
+        const quotes = Array.from(container.children);
+        
+        // Get all pinned quotes (universal)
+        const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+        
+        // Sort quotes: pinned first, then by original order
+        quotes.sort((a, b) => {
+            const aIndex = parseInt(a.querySelector('.quote-pin').getAttribute('data-index'));
+            const bIndex = parseInt(b.querySelector('.quote-pin').getAttribute('data-index'));
+            
+            const aQuoteText = a.querySelector('.quote-text').textContent.replace(/"/g, '');
+            const bQuoteText = b.querySelector('.quote-text').textContent.replace(/"/g, '');
+            
+            const aPinned = pinned.some(pin => pin.quote === aQuoteText);
+            const bPinned = pinned.some(pin => pin.quote === bQuoteText);
+            
+            if (aPinned && !bPinned) return -1;
+            if (!aPinned && bPinned) return 1;
+            return aIndex - bIndex;
+        });
+        
+        // Re-append in new order
+        quotes.forEach(quote => container.appendChild(quote));
+        
+        // Restore citations after reordering
+        setTimeout(() => {
+            this.restoreCitations();
+        }, 100);
+    }
+
+    restorePinnedState() {
+        try {
+            const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
+            
+            if (pinned.length === 0) {
+                return;
+            }
+            
+            // Find all quote elements and check if they should be pinned
+            // Only check quotes that are NOT already displayed as pinned elements (data-pinned-id)
+            const quoteElements = document.querySelectorAll('#quotes-container .quote-item:not([data-pinned-id])');
+            
+            if (quoteElements.length === 0) {
+                return;
+            }
+            
+            let restoredCount = 0;
+            quoteElements.forEach((quoteElement, position) => {
+                const pinElement = quoteElement.querySelector('.quote-pin');
+                if (pinElement) {
+                    const index = parseInt(pinElement.getAttribute('data-index'));
+                    const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
+                    
+                    
+                    // Check if this quote is pinned by matching quote text (universal)
+                    const pinnedQuote = pinned.find(pin => pin.quote === quoteText);
+                    
+                    if (pinnedQuote) {
+                        quoteElement.classList.add('pinned');
+                        pinElement.style.opacity = '1';
+                        restoredCount++;
+                        
+                        // Restore citation if it exists
+                        const citationDisplay = document.getElementById(`citation-${index}`);
+                        if (pinnedQuote.citation && citationDisplay) {
+                            citationDisplay.innerHTML = pinnedQuote.citation;
+                            // Use stored visibility state, default to hidden if not specified
+                            const isVisible = pinnedQuote.citationVisible !== false;
+                            citationDisplay.style.display = isVisible ? 'block' : 'none';
+                            
+                            // Update the generate citation button based on visibility state
+                            const citationBtn = quoteElement.querySelector('.generate-citation-btn');
+                            if (citationBtn) {
+                                citationBtn.innerHTML = isVisible ? 'Hide Citation' : 'Generate Citation';
+                            }
+                        }
+                    }
+                }
+            });
+            
+            
+            // Reorder quotes with pinned ones at top
+            this.reorderQuotes();
+            
+            // Restore citations AFTER quotes are reordered
+            this.restoreCitations();
+        } catch (error) {
+            console.error('Failed to restore pinned state:', error);
+        }
+    }
+}
+
+// Initialize the popup when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    window.quotelyPopup = new QuotelyPopup();
+});

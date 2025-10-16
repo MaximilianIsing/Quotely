@@ -1,1 +1,28 @@
-chrome.runtime.onInstalled.addListener(e=>{"install"===e.reason&&chrome.storage.sync.set({citationFormat:"MLA",serverUrl:"https://quotely-rmgh.onrender.com"})}),chrome.runtime.onMessage.addListener((e,t,r)=>{if("getTabInfo"===e.action)return chrome.tabs.query({active:!0,currentWindow:!0},e=>{e[0]&&r({url:e[0].url,title:e[0].title,id:e[0].id})}),!0});
+// Quotely Background Script
+// Handles extension lifecycle and communication
+
+chrome.runtime.onInstalled.addListener((details) => {
+    if (details.reason === 'install') {
+        chrome.storage.sync.set({
+            citationFormat: 'MLA',
+            serverUrl: 'https://quotely-rmgh.onrender.com' //https://quotely-rmgh.onrender.com
+        });
+    }
+});
+
+// Handle messages from content scripts and popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'getTabInfo') {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs[0]) {
+                sendResponse({
+                    url: tabs[0].url,
+                    title: tabs[0].title,
+                    id: tabs[0].id
+                });
+            }
+        });
+        return true; // Keep the message channel open
+    }
+});
+
