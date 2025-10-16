@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://quotely-rmgh.onrender.com';
+        this.serverUrl = 'http:localhost:3000'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.storageKey = 'quotely_last_session';
@@ -92,17 +92,39 @@ class QuotelyPopup {
             let pageData;
             
             if (isPDF) {
-                // For PDFs, send the URL to server for pdf-parse processing
+                // For PDFs, handle local vs remote files differently
                 try {
+                    let requestBody;
+                    
+                    // Check if it's a local file
+                    if (tab.url.startsWith('file://')) {
+                        // Read local PDF file and send as base64
+                        const pdfBlob = await fetch(tab.url).then(r => r.blob());
+                        const arrayBuffer = await pdfBlob.arrayBuffer();
+                        const base64Pdf = btoa(
+                            new Uint8Array(arrayBuffer)
+                                .reduce((data, byte) => data + String.fromCharCode(byte), '')
+                        );
+                        
+                        requestBody = {
+                            fileContent: base64Pdf,
+                            title: tab.title || 'Local PDF',
+                            isLocalFile: true
+                        };
+                    } else {
+                        // For remote PDFs, just send the URL
+                        requestBody = {
+                            url: tab.url,
+                            title: tab.title
+                        };
+                    }
+                    
                     const pdfResponse = await fetch(`${this.serverUrl}/api/extract-pdf`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({
-                            url: tab.url,
-                            title: tab.title
-                        })
+                        body: JSON.stringify(requestBody)
                     });
                     
                     if (pdfResponse.ok) {

@@ -490,37 +490,38 @@ app.post('/api/extract-pdf', async (req, res) => {
       return res.status(500).json({ error: 'PDF processing not available. Please install pdf2json: npm install pdf2json' });
     }
 
-    const { url, title } = req.body;
+    const { url, title, fileContent, isLocalFile } = req.body;
     
-    if (!url) {
-      return res.status(400).json({ error: 'URL is required' });
+    // Validate input
+    if (!url && !fileContent) {
+      return res.status(400).json({ error: 'URL or file content is required' });
     }
 
     let pdfBuffer;
     
-    if (url.startsWith('file://')) {
-      // Handle local files - fix Windows path handling
-      let filePath = url.replace('file://', '');
-      // Remove leading slash on Windows paths
-      if (filePath.startsWith('/') && filePath.match(/^\/[A-Za-z]:/)) {
-        filePath = filePath.substring(1);
-      }
-      // Decode URL-encoded characters (e.g., %20 -> space)
-      filePath = decodeURIComponent(filePath);
-      
+    // Handle base64 file content (local files sent from extension)
+    if (fileContent && isLocalFile) {
       try {
-        pdfBuffer = fs.readFileSync(filePath);
+        pdfBuffer = Buffer.from(fileContent, 'base64');
       } catch (error) {
-        return res.status(400).json({ error: 'Could not read local PDF file' });
+        return res.status(400).json({ error: 'Could not decode PDF file content' });
       }
-    } else {
-      // Handle remote URLs
+    } 
+    // Handle remote URLs
+    else if (url && !url.startsWith('file://')) {
       try {
         const response = await axios.get(url, { responseType: 'arraybuffer' });
         pdfBuffer = Buffer.from(response.data);
       } catch (error) {
         return res.status(400).json({ error: 'Could not download PDF from URL' });
       }
+    }
+    // Legacy: file:// URLs (shouldn't happen with new client code)
+    else if (url && url.startsWith('file://')) {
+      return res.status(400).json({ error: 'Local file URLs are not supported. Please ensure your extension is up to date.' });
+    }
+    else {
+      return res.status(400).json({ error: 'Invalid request format' });
     }
 
     // Extract text from PDF using pdf2json
@@ -596,9 +597,12 @@ app.post('/api/extract-pdf', async (req, res) => {
 
           // Check if PDF is very large (> 50,000 characters)
           const SEGMENT_SIZE = 50000;
+          // Use URL for remote files, or generate a cache key for local files
+          const cacheKey = url || `local_${title}_${Date.now()}`;
+          
           if (extractedText.length > SEGMENT_SIZE) {
             // Cache the full content for later segment retrieval
-            cachePdfContent(url, extractedText, ocrWasUsed);
+            cachePdfContent(cacheKey, extractedText, ocrWasUsed);
             
             // Create segment metadata
             const segments = [];
@@ -615,7 +619,7 @@ app.post('/api/extract-pdf', async (req, res) => {
               totalLength: extractedText.length,
               segmentCount: segments.length,
               segments: segments,
-              url: url,
+              url: cacheKey,  // Use cache key instead of URL
               title: title || 'PDF Document',
               pageCount: pageCount,
               isOCR: ocrWasUsed
@@ -623,7 +627,7 @@ app.post('/api/extract-pdf', async (req, res) => {
           } else {
             resolve({
               content: extractedText,
-              url: url,
+              url: cacheKey,  // Use cache key instead of URL
               title: title || 'PDF Document',
               pageCount: pageCount,
               info: pdfData.Meta,
