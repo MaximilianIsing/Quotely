@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'http:localhost:3000'; //https://quotely-rmgh.onrender.com
+        this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.storageKey = 'quotely_last_session';
@@ -12,9 +12,7 @@ class QuotelyPopup {
         this.attachEventListeners();
         this.restoreLastSession();
         this.checkPendingSegmentSelection();
-        
-        // Also try to restore pins after a short delay in case session restoration didn't work
-
+    
     }
 
     initializeElements() {

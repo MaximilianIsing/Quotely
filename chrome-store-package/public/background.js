@@ -1,0 +1,1 @@
+chrome.runtime.onInstalled.addListener(e=>{"install"===e.reason&&chrome.storage.sync.set({citationFormat:"MLA",serverUrl:"https://quotely-rmgh.onrender.com"})}),chrome.runtime.onMessage.addListener((e,t,r)=>{if("getTabInfo"===e.action)return chrome.tabs.query({active:!0,currentWindow:!0},e=>{e[0]&&r({url:e[0].url,title:e[0].title,id:e[0].id})}),!0});

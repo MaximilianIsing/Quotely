@@ -5,7 +5,7 @@ chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {
         chrome.storage.sync.set({
             citationFormat: 'MLA',
-            serverUrl: 'http:localhost:3000' //https://quotely-rmgh.onrender.com
+            serverUrl: 'https://quotely-rmgh.onrender.com' //https://quotely-rmgh.onrender.com
         });
     }
 });
