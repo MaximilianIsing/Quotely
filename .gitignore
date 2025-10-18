@@ -13,6 +13,9 @@ google-credentials.json
 # API keys
 gptkey.txt
 
+#debug toggle files
+debugtoggle.txt
+
 # Logs
 storage/logs/
 *.log

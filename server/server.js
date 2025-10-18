@@ -9,6 +9,21 @@ const fs = require('fs');
 const path = require('path');
 const { generateCitation } = require('./citation-generator');
 
+// Debugging flag - read from debugtoggle.txt (must be 'true' or 'false')
+let Debugging = false; // default value
+try {
+  const debugTogglePath = path.join(__dirname, '..', 'debugtoggle.txt');
+  const debugValue = fs.readFileSync(debugTogglePath, 'utf8').trim().toLowerCase();
+  Debugging = debugValue === 'true';
+  if (Debugging) {
+    console.log(`[DEBUG] Debugging mode is ENABLED`);
+  } else {
+    console.log(`[DEBUG] Debugging mode is DISABLED`);
+  }
+} catch (error) {
+  console.warn('Could not read debugtoggle.txt, using default value (false):', error.message);
+}
+
 // For PDF processing
 let PDFParser;
 try {
@@ -42,10 +57,12 @@ const PDF_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 const MAX_CACHE_SIZE = 15; // Maximum number of cached PDFs
 
 function cachePdfContent(url, content, isOCR = false) {
+    if (Debugging) console.log(`[DEBUG] Caching PDF content for: ${url} (OCR: ${isOCR})`);
     // Clean up expired entries first
     for (const [key, value] of pdfCache.entries()) {
         if (Date.now() - value.timestamp > PDF_CACHE_DURATION) {
             pdfCache.delete(key);
+            if (Debugging) console.log(`[DEBUG] Removed expired cache entry: ${key}`);
         }
     }
     
@@ -75,14 +92,19 @@ function cachePdfContent(url, content, isOCR = false) {
 
 function getCachedPdfContent(url) {
     const cached = pdfCache.get(url);
-    if (!cached) return null;
+    if (!cached) {
+        if (Debugging) console.log(`[DEBUG] Cache miss for: ${url}`);
+        return null;
+    }
     
     // Check if expired
     if (Date.now() - cached.timestamp > PDF_CACHE_DURATION) {
         pdfCache.delete(url);
+        if (Debugging) console.log(`[DEBUG] Cache expired for: ${url}`);
         return null;
     }
     
+    if (Debugging) console.log(`[DEBUG] Cache hit for: ${url}`);
     // Update timestamp for LRU (Least Recently Used)
     cached.timestamp = Date.now();
     pdfCache.set(url, cached);
@@ -97,6 +119,7 @@ function getCachedPdfContent(url) {
  * @returns {Promise<{text: string, pageCount: number}>} Extracted text and page count
  */
 async function extractPDFTextOCR(pdfBuffer, totalPages) {
+    if (Debugging) console.log(`[DEBUG] Starting OCR extraction for ${totalPages} pages`);
     if (!visionClient) {
         throw new Error('Google Cloud Vision is not configured. Please set up credentials.');
     }
@@ -118,9 +141,12 @@ async function extractPDFTextOCR(pdfBuffer, totalPages) {
     }
     
     // Processing pages in chunks of 5
+    if (Debugging) console.log(`[DEBUG] Processing ${chunks.length} chunks in parallel`);
     
     // Process all chunks in parallel
     const chunkPromises = chunks.map(async (pageRange, chunkIndex) => {
+        if (Debugging) console.log(`[DEBUG] Processing chunk ${chunkIndex + 1}/${chunks.length} (pages ${pageRange[0]}-${pageRange[pageRange.length - 1]})`);
+
         const [response] = await visionClient.batchAnnotateFiles({
             requests: [{
                 inputConfig: {
@@ -152,6 +178,7 @@ async function extractPDFTextOCR(pdfBuffer, totalPages) {
     
     // Wait for all chunks to complete
     const results = await Promise.all(chunkPromises);
+    if (Debugging) console.log(`[DEBUG] All OCR chunks completed`);
     
     // Sort by chunk index and combine text
     results.sort((a, b) => a.chunkIndex - b.chunkIndex);
@@ -159,6 +186,7 @@ async function extractPDFTextOCR(pdfBuffer, totalPages) {
     
     // Remove all newlines and extra spaces
     const cleanedText = fullText.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (Debugging) console.log(`[DEBUG] OCR extracted ${cleanedText.length} characters`);
     
     return {
         text: cleanedText,
@@ -229,6 +257,7 @@ function logPromptToCsv(topic, pageTitle, pageUrl) {
 app.post('/api/find-quotes', async (req, res) => {
   try {
     const { topic, pageContent, pageUrl, pageTitle, isOCR } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/find-quotes - Topic: "${topic}", URL: ${pageUrl}, Content length: ${pageContent?.length || 0}, OCR: ${isOCR}`);
     
     if (!topic || !pageContent) {
       return res.status(400).json({ error: 'Topic and page content are required' });
@@ -238,6 +267,7 @@ app.post('/api/find-quotes', async (req, res) => {
 
     const MAX_CHARS = 50000;
     const rawContent = String(pageContent || '').slice(0, MAX_CHARS);
+    if (Debugging) console.log(`[DEBUG] Processed content: ${rawContent.length} characters (truncated from ${pageContent?.length || 0})`);
 
     // Log the incoming prompt
     logPromptToCsv(topic, pageTitle, pageUrl);
@@ -257,6 +287,7 @@ app.post('/api/find-quotes', async (req, res) => {
       .split(/(?<=[.!?])\s+/)
       .map(s => s.trim())
       .filter(s => s.length > 20);
+    if (Debugging) console.log(`[DEBUG] Split content into ${sentences.length} sentences`);
     
     // Use Fuse.js for fuzzy matching (items are plain strings, so no keys)
   let fuse = new Fuse(sentences, {
@@ -266,6 +297,7 @@ app.post('/api/find-quotes', async (req, res) => {
     
     const searchResults = fuse.search(topic);
     fuse = null; // Allow garbage collection of Fuse.js index
+    if (Debugging) console.log(`[DEBUG] Fuse.js found ${searchResults.length} fuzzy matches`);
 
     // Build candidate segments using a hybrid relevance heuristic
     const minLen = 20;  // Lower minimum length
@@ -309,7 +341,9 @@ app.post('/api/find-quotes', async (req, res) => {
     // Determine if page has any relevance signals at all
     const hasKeywordSignal = scored.some(e => e.keywordHits > 0);
     const hasFuzzySignal = searchResults.length > 0;
+    if (Debugging) console.log(`[DEBUG] Relevance signals - Keyword: ${hasKeywordSignal}, Fuzzy: ${hasFuzzySignal}`);
     if (!hasKeywordSignal && !hasFuzzySignal) {
+      if (Debugging) console.log(`[DEBUG] No relevance signals found, returning empty result`);
       return res.json({ quotes: [], message: 'No relevant quotes found' });
     }
 
@@ -357,6 +391,7 @@ app.post('/api/find-quotes', async (req, res) => {
     // Sort indices to keep natural reading order, then map to text
     picked.sort((a, b) => a - b);
     const relevantQuotes = picked.map(idx => sentences[idx]).filter(Boolean);
+    if (Debugging) console.log(`[DEBUG] Selected ${relevantQuotes.length} relevant quote segments`);
     if (relevantQuotes.length === 0) {
       return res.json({ quotes: [], message: 'No relevant quotes found' });
     }
@@ -373,6 +408,7 @@ app.post('/api/find-quotes', async (req, res) => {
     - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
 
     const userContent = `Topic: "${topic}"\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
+    if (Debugging) console.log(`[DEBUG] Calling GPT-4.1-nano for quote analysis (${userContent.length} characters)`);
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-nano",
@@ -388,6 +424,7 @@ app.post('/api/find-quotes', async (req, res) => {
       ],
       temperature: 0.1  
     });
+    if (Debugging) console.log(`[DEBUG] GPT response received`);
 
     let analyzedQuotes = [];
     try {
@@ -406,6 +443,7 @@ app.post('/api/find-quotes', async (req, res) => {
         quote: item.quote || item,
         relevance: item.relevance || `AI-analyzed quote #${index + 1}`
       }));
+      if (Debugging) console.log(`[DEBUG] Successfully parsed ${analyzedQuotes.length} quotes from GPT`);
       
     } catch (e) {
       console.error('JSON parsing failed:', e.message);
@@ -416,6 +454,7 @@ app.post('/api/find-quotes', async (req, res) => {
       }));
     }
 
+    if (Debugging) console.log(`[DEBUG] Returning ${analyzedQuotes.length} quotes to client`);
     res.json({
       quotes: analyzedQuotes,
       pageTitle: pageTitle || 'Current Page',
@@ -431,6 +470,7 @@ app.post('/api/find-quotes', async (req, res) => {
 app.post('/api/format-citation', async (req, res) => {
   try {
     const { quote, pageTitle, pageUrl, format, author, publicationDate } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/format-citation - Format: ${format}, URL: ${pageUrl}`);
     
     if (!quote || !pageTitle || !pageUrl || !format) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -438,7 +478,9 @@ app.post('/api/format-citation', async (req, res) => {
 
     try {
       // Use the citation generator
+      if (Debugging) console.log(`[DEBUG] Generating citation using citation-generator.js`);
       const citationResult = await generateCitation(pageUrl, format);
+      if (Debugging) console.log(`[DEBUG] Citation generated successfully`);
       
       const citationResponse = { 
         citation: citationResult.fullCitation,
@@ -452,6 +494,7 @@ app.post('/api/format-citation', async (req, res) => {
 
     } catch (citationError) {
       console.error('Citation error:', citationError.message);
+      if (Debugging) console.log(`[DEBUG] Citation generation failed, using fallback formatting`);
       
       // Fallback to manual formatting
       const currentYear = new Date().getFullYear();
@@ -491,6 +534,7 @@ app.post('/api/extract-pdf', async (req, res) => {
     }
 
     const { url, title, fileContent, isLocalFile } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/extract-pdf - URL: ${url}, Local: ${isLocalFile}, Title: ${title}`);
     
     // Validate input
     if (!url && !fileContent) {
@@ -503,6 +547,7 @@ app.post('/api/extract-pdf', async (req, res) => {
     if (fileContent && isLocalFile) {
       try {
         pdfBuffer = Buffer.from(fileContent, 'base64');
+        if (Debugging) console.log(`[DEBUG] Decoded local PDF file (${pdfBuffer.length} bytes)`);
       } catch (error) {
         return res.status(400).json({ error: 'Could not decode PDF file content' });
       }
@@ -510,8 +555,10 @@ app.post('/api/extract-pdf', async (req, res) => {
     // Handle remote URLs
     else if (url && !url.startsWith('file://')) {
       try {
+        if (Debugging) console.log(`[DEBUG] Downloading PDF from URL...`);
         const response = await axios.get(url, { responseType: 'arraybuffer' });
         pdfBuffer = Buffer.from(response.data);
+        if (Debugging) console.log(`[DEBUG] Downloaded PDF (${pdfBuffer.length} bytes)`);
       } catch (error) {
         return res.status(400).json({ error: 'Could not download PDF from URL' });
       }
@@ -537,6 +584,7 @@ app.post('/api/extract-pdf', async (req, res) => {
           // Extract text from all pages
           let extractedText = '';
           const pageCount = pdfData.Pages ? pdfData.Pages.length : 0;
+          if (Debugging) console.log(`[DEBUG] PDF parsed successfully - ${pageCount} pages`);
           
           if (pdfData.Pages && pdfData.Pages.length > 0) {
             pdfData.Pages.forEach((page, pageIndex) => {
@@ -558,14 +606,17 @@ app.post('/api/extract-pdf', async (req, res) => {
           const avgCharsPerPage = pageCount > 0 ? extractedText.length / pageCount : 0;
           const isScannedPDF = pageCount > 0 && avgCharsPerPage < 500; // Less than 500 chars per page suggests scanned PDF
           let ocrWasUsed = false; // Track if OCR was used
+          if (Debugging) console.log(`[DEBUG] Extracted ${extractedText.length} characters (${avgCharsPerPage.toFixed(0)} avg per page), Scanned: ${isScannedPDF}`);
           
           if (isScannedPDF && visionClient) {
             // Check if we have cached OCR content for this PDF
             const cachedData = getCachedPdfContent(url);
             if (cachedData && cachedData.isOCR) {
+              if (Debugging) console.log(`[DEBUG] Using cached OCR content`);
               extractedText = cachedData.content;
               ocrWasUsed = true;
             } else {
+              if (Debugging) console.log(`[DEBUG] Starting OCR processing for scanned PDF`);
               
               // Check page limit (30 pages for performance)
               if (pageCount > 30) {
@@ -601,6 +652,7 @@ app.post('/api/extract-pdf', async (req, res) => {
           const cacheKey = url || `local_${title}_${Date.now()}`;
           
           if (extractedText.length > SEGMENT_SIZE) {
+            if (Debugging) console.log(`[DEBUG] PDF is large (${extractedText.length} chars), creating ${Math.ceil(extractedText.length / SEGMENT_SIZE)} segments`);
             // Cache the full content for later segment retrieval
             cachePdfContent(cacheKey, extractedText, ocrWasUsed);
             
@@ -657,6 +709,7 @@ app.post('/api/extract-pdf', async (req, res) => {
 app.post('/api/get-pdf-segment', async (req, res) => {
   try {
     const { pdfUrl, segmentIndex } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/get-pdf-segment - URL: ${pdfUrl}, Segment: ${segmentIndex}`);
     
     if (!pdfUrl || segmentIndex === undefined) {
       return res.status(400).json({ error: 'PDF URL and segment index are required' });
@@ -673,6 +726,7 @@ app.post('/api/get-pdf-segment', async (req, res) => {
     const start = segmentIndex * SEGMENT_SIZE;
     const end = Math.min(start + SEGMENT_SIZE, cached.content.length);
     const segmentContent = cached.content.substring(start, end);
+    if (Debugging) console.log(`[DEBUG] Returning segment ${segmentIndex}: ${start}-${end} (${segmentContent.length} chars)`);
 
     res.json({
       content: segmentContent,
@@ -690,4 +744,5 @@ app.post('/api/get-pdf-segment', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Quotely server running on port ${PORT}`);
+    if (Debugging) console.log(`[DEBUG] Debugging mode is ENABLED`);
 });
