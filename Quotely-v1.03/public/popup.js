@@ -4,15 +4,19 @@ class QuotelyPopup {
         this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
+        this.isPdfPage = false; // Track if current page is a PDF
+        this.isPdfUploadMode = false; // Track if we're in PDF upload mode
         this.storageKey = 'quotely_last_session';
         this.citationsKey = 'quotely_citations';
         this.quotesKey = 'quotely_quotes'; // Unified quote list with citation state
         this.segmentStateKey = 'quotely_segment_state'; // State for pending segment selection
+        this.tooltipElement = null; // For free-floating tooltip
         this.initializeElements();
         this.attachEventListeners();
         this.restoreLastSession();
         this.checkPendingSegmentSelection();
-    
+        this.checkPdfUploadMode();
+
     }
 
     initializeElements() {
@@ -25,6 +29,7 @@ class QuotelyPopup {
         this.btnText = this.findQuotesBtn.querySelector('.btn-text');
         this.searchIcon = this.findQuotesBtn.querySelector('.search-icon');
         this.loadingSpinner = this.findQuotesBtn.querySelector('.loading-spinner');
+        this.createTooltipElement();
     }
 
     attachEventListeners() {
@@ -68,6 +73,9 @@ class QuotelyPopup {
 
         // Clear any pending segment selection state when starting a new search
         localStorage.removeItem(this.segmentStateKey);
+        
+        // Clear any existing PDF dropzone when starting new search
+        this.clearPdfDropzone();
 
         // Clear current page quotes when starting a new search (but keep pins)
         this.clearCurrentPageQuotes();
@@ -86,9 +94,10 @@ class QuotelyPopup {
             
             // Check if this is a PDF page
             const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
-            
+            this.isPdfPage = isPDF; // Store PDF status
+
             let pageData;
-            
+
             if (isPDF) {
                 // For PDFs, handle local vs remote files differently
                 try {
@@ -96,9 +105,18 @@ class QuotelyPopup {
                     
                     // Check if it's a local file
                     if (tab.url.startsWith('file://')) {
-                        // Read local PDF file and send as base64
-                        const pdfBlob = await fetch(tab.url).then(r => r.blob());
-                        const arrayBuffer = await pdfBlob.arrayBuffer();
+                        // Local PDFs require drag & drop (can't fetch due to security)
+                        this.setLoading(false);
+                        const droppedFile = await this.showPdfDropzone(tab.title);
+                        
+                        if (!droppedFile) {
+                            // User cancelled or closed dropzone
+                            return;
+                        }
+                        
+                        // Read the dropped file and convert to base64
+                        this.setLoading(true);
+                        const arrayBuffer = await droppedFile.arrayBuffer();
                         const base64Pdf = btoa(
                             new Uint8Array(arrayBuffer)
                                 .reduce((data, byte) => data + String.fromCharCode(byte), '')
@@ -133,7 +151,7 @@ class QuotelyPopup {
                             this.setLoading(false);
                             
                             // Show segment selection UI for PDF
-                            const selectedSegmentIndex = await this.showPdfSegmentSelector(pageData, tab.url);
+                            const selectedSegmentIndex = await this.showPdfSegmentSelector(pageData, pageData.url);
                             if (selectedSegmentIndex === null) {
                                 // User cancelled (shouldn't happen as we removed cancel button, but just in case)
                                 return;
@@ -146,7 +164,7 @@ class QuotelyPopup {
                                     'Content-Type': 'application/json',
                                 },
                                 body: JSON.stringify({
-                                    pdfUrl: tab.url,
+                                    pdfUrl: pageData.url,
                                     segmentIndex: selectedSegmentIndex
                                 })
                             });
@@ -188,9 +206,17 @@ class QuotelyPopup {
                     this.showError('This PDF requires scanning but exceeds the 30-page limit for OCR processing.');
                     return;
                 }
-            } else {
-                // For HTML pages, use the existing extraction
-                const results = await chrome.scripting.executeScript({
+                } else {
+                    // Clear PDF upload mode if we're processing a non-PDF page
+                    if (this.isPdfUploadMode) {
+                        this.isPdfUploadMode = false;
+                        this.clearPdfUploadState();
+                        // Remove any existing PDF dropzone
+                        this.clearPdfDropzone();
+                    }
+                    
+                    // For HTML pages, use the existing extraction
+                    const results = await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: () => {
                     // Beautiful Soup-like content extraction
@@ -353,7 +379,8 @@ class QuotelyPopup {
                     pageContent: limitedContent,
                     pageUrl: this.lastPageUrl,
                     pageTitle: this.lastPageTitle,
-                    isOCR: pageData.isOCR || false
+                    isOCR: pageData.isOCR || false,
+                    fromPdf: this.isPdfPage || false // Add flag indicating if content came from PDF
                 })
             });
 
@@ -370,7 +397,12 @@ class QuotelyPopup {
             if (data.quotes && data.quotes.length > 0) {
                 this.lastPageTitle = data.pageTitle || this.lastPageTitle;
                 this.lastPageUrl = data.pageUrl || this.lastPageUrl;
-                this.displayQuotes(data.quotes, this.lastPageTitle, this.lastPageUrl);
+                // Add fromPdf flag to all quotes (from server response)
+                const quotesWithMetadata = data.quotes.map(quote => ({
+                    ...quote,
+                    fromPdf: data.fromPdf !== undefined ? data.fromPdf : this.isPdfPage || false
+                }));
+                this.displayQuotes(quotesWithMetadata, this.lastPageTitle, this.lastPageUrl);
             } else {
                 this.showError('No relevant quotes found. Try a different topic or check if the page has relevant content.');
             }
@@ -560,6 +592,226 @@ class QuotelyPopup {
         return div.innerHTML;
     }
 
+    showPdfDropzone(pdfTitle) {
+        return new Promise((resolve) => {
+            // Hide error message
+            this.hideError();
+
+            // Create inline dropzone UI (similar to segment selector)
+            const dropzoneHTML = `
+                <div class="segment-container">
+                    <div class="segment-selector">
+                        <p style="margin-bottom: 7px; margin-top: -10px; text-align: center;">Hey, it looks like this is a pdf. Let's upload it!</p>
+                        <div class="pdf-file-drop-area" id="pdf-drop-area">
+                            <span class="drop-area-text">
+                                <img src="../media/Clip.png" alt="📎" style="width: auto; height: 20px; margin-right: 3px; vertical-align: middle; object-fit: contain;">
+                                Drop PDF here or click to browse
+                            </span>
+                        </div>
+                        <input type="file" id="pdf-file-input" accept=".pdf" style="display: none;">
+                    </div>
+                </div>
+            `;
+
+            // Place dropzone in main content area, not inside results section
+            const mainContent = document.querySelector('.main-content');
+            mainContent.insertAdjacentHTML('beforeend', dropzoneHTML);
+            
+            // Hide the results section completely for PDF upload mode
+            this.resultsSection.style.display = 'none';
+
+            // Expand container to show dropzone
+            const container = document.querySelector('.container');
+            container.classList.add('pdf-upload-expanded');
+
+            // Set PDF upload mode and save to storage
+            this.isPdfUploadMode = true;
+            this.savePdfUploadState();
+
+            const dropArea = mainContent.querySelector('#pdf-drop-area');
+            const fileInput = mainContent.querySelector('#pdf-file-input');
+            
+            let dragCounter = 0;
+            
+            // Click to browse
+            dropArea.addEventListener('click', () => {
+                fileInput.click();
+            });
+            
+            // Drag & drop event handlers
+            dropArea.addEventListener('dragenter', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragCounter++;
+                dropArea.classList.add('drag-over');
+            });
+            
+            dropArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+            
+            dropArea.addEventListener('dragleave', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragCounter--;
+                if (dragCounter === 0) {
+                    dropArea.classList.remove('drag-over');
+                }
+            });
+            
+            dropArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dragCounter = 0;
+                dropArea.classList.remove('drag-over');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    const file = files[0];
+                    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+                        // Remove dropzone and collapse container
+                        const dropzoneContent = mainContent.querySelector('.segment-container');
+                        if (dropzoneContent) {
+                            dropzoneContent.remove();
+                        }
+                        container.classList.remove('segment-expanded', 'pdf-upload-expanded');
+                        this.hideResults();
+                        this.isPdfUploadMode = false;
+                        this.clearPdfUploadState();
+                        resolve(file);
+                    } else {
+                        this.showError('Please drop a PDF file.');
+                    }
+                }
+            });
+            
+            // File input handler
+            fileInput.addEventListener('change', (e) => {
+                const files = e.target.files;
+                if (files.length > 0) {
+                    const file = files[0];
+                    if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+                        // Remove dropzone and collapse container
+                        const dropzoneContent = mainContent.querySelector('.segment-container');
+                        if (dropzoneContent) {
+                            dropzoneContent.remove();
+                        }
+                        container.classList.remove('segment-expanded', 'pdf-upload-expanded');
+                        this.hideResults();
+                        this.isPdfUploadMode = false;
+                        this.clearPdfUploadState();
+                        resolve(file);
+                    } else {
+                        this.showError('Please select a PDF file.');
+                    }
+                }
+            });
+        });
+    }
+
+    savePdfUploadState() {
+        chrome.storage.local.set({
+            'quotely_pdf_upload_mode': true
+        });
+    }
+
+    clearPdfUploadState() {
+        chrome.storage.local.remove(['quotely_pdf_upload_mode']);
+    }
+
+    clearPdfDropzone() {
+        // Remove any existing PDF dropzone from main content
+        const mainContent = document.querySelector('.main-content');
+        const dropzoneContent = mainContent.querySelector('.segment-container');
+        if (dropzoneContent) {
+            dropzoneContent.remove();
+        }
+        
+        // Collapse container if it was expanded
+        const container = document.querySelector('.container');
+        container.classList.remove('segment-expanded', 'pdf-upload-expanded');
+    }
+
+    checkPdfUploadMode() {
+        chrome.storage.local.get(['quotely_pdf_upload_mode'], (result) => {
+            if (result.quotely_pdf_upload_mode) {
+                // Hide results section and restore PDF upload mode
+                this.hideResults();
+                this.isPdfUploadMode = true;
+                this.showPdfDropzone('Local PDF');
+            }
+        });
+    }
+
+    createTooltipElement() {
+        // Create a single tooltip element for free-floating positioning
+        this.tooltipElement = document.createElement('div');
+        this.tooltipElement.className = 'free-floating-tooltip';
+        this.tooltipElement.style.cssText = `
+            position: fixed;
+            background: #111827;
+            color: #ffffff;
+            padding: 10px 14px;
+            border: 1px solid #374151;
+            font-size: 13px;
+            line-height: 1.4;
+            max-width: 250px;
+            min-width: 240px;
+            white-space: normal;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+            border-radius: 6px;
+            z-index: 1000;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.12s ease;
+            display: none;
+        `;
+        document.body.appendChild(this.tooltipElement);
+    }
+
+    showTooltip(text, baseX, baseY) {
+        // Create a temporary measurement element to calculate height
+        const measureDiv = document.createElement('div');
+        measureDiv.style.cssText = `
+            position: absolute;
+            visibility: hidden;
+            width: 240px;
+            max-width: 250px;
+            padding: 10px 14px;
+            font-size: 13px;
+            line-height: 1.4;
+            white-space: normal;
+            border: 1px solid #374151;
+            background: #111827;
+            color: #ffffff;
+            z-index: -1;
+        `;
+        measureDiv.textContent = text;
+        document.body.appendChild(measureDiv);
+
+        // Get the actual height after rendering
+        const tooltipHeight = measureDiv.offsetHeight;
+        document.body.removeChild(measureDiv);
+
+    // Position tooltip so its bottom aligns with the question mark's top
+    const tooltipX = baseX;
+    const tooltipY = baseY - tooltipHeight + 31; // 18px gap above question mark (moved down 10px)
+
+        this.tooltipElement.textContent = text;
+        this.tooltipElement.style.left = tooltipX + 'px';
+        this.tooltipElement.style.top = tooltipY + 'px';
+        this.tooltipElement.style.display = 'block';
+        this.tooltipElement.style.opacity = '1';
+    }
+
+    hideTooltip() {
+        this.tooltipElement.style.opacity = '0';
+        setTimeout(() => {
+            this.tooltipElement.style.display = 'none';
+        }, 120);
+    }
+
     // extractPageContent removed; using inline function via chrome.scripting.executeScript
 
     displayQuotes(quotes, pageTitle, pageUrl) {
@@ -587,7 +839,7 @@ class QuotelyPopup {
         
         // Then append the new quotes (excluding duplicates)
         newQuotes.forEach((quoteData, index) => {
-            const quoteElement = this.createQuoteElement(quoteData, index, pageTitle, pageUrl);
+            const quoteElement = this.createQuoteElement(quoteData, index, pageTitle, pageUrl, quoteData.fromPdf);
             this.quotesContainer.appendChild(quoteElement);
         });
 
@@ -604,15 +856,32 @@ class QuotelyPopup {
         container.classList.add('expanded');
     }
 
-    createQuoteElement(quoteData, index, pageTitle, pageUrl) {
+    createQuoteElement(quoteData, index, pageTitle, pageUrl, fromPdf = false) {
         const quoteDiv = document.createElement('div');
         quoteDiv.className = 'quote-item';
-        
+
         const quoteText = quoteData.quote || quoteData;
         const relevance = quoteData.relevance || 'Relevant to topic';
-        
+
+        // Conditionally render citation button based on whether it's from a PDF
+        const citationButtonHTML = fromPdf ?
+            `<button class="action-btn generate-citation-btn pdf-no-citation" disabled>Citation Unavailable</button>` :
+            `<button class="action-btn generate-citation-btn" data-index="${index}" data-title="${pageTitle.replace(/"/g, '&quot;')}" data-url="${pageUrl.replace(/"/g, '&quot;')}">
+                Generate Citation
+            </button>`;
+
+        // Special handling for first quote - use JS tooltip instead of CSS tooltip
+        const isFirstQuote = index === 0;
+        const helpElementHTML = isFirstQuote ?
+            `<div class="quote-help js-tooltip" data-help="${relevance.replace(/"/g, '&quot;')}">
+                <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
+            </div>` :
+            `<div class="quote-help" data-help="${relevance.replace(/"/g, '&quot;')}">
+                <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
+            </div>`;
+
         quoteDiv.innerHTML = `
-            <div class="quote-pin" data-index="${index}">
+            <div class="quote-pin" data-index="${index}" data-from-pdf="${fromPdf}">
                 <img src="../media/Pin.png" alt="Pin" style="width: 16px; height: 19px;">
             </div>
             <div class="quote-text">"${quoteText}"</div>
@@ -620,12 +889,8 @@ class QuotelyPopup {
                 <button class="action-btn copy-btn" data-quote="${quoteText.replace(/"/g, '&quot;')}">
                     Copy Quote
                 </button>
-                <button class="action-btn generate-citation-btn" data-index="${index}" data-title="${pageTitle.replace(/"/g, '&quot;')}" data-url="${pageUrl.replace(/"/g, '&quot;')}">
-                    Generate Citation
-                </button>
-                <div class="quote-help" data-help="${relevance.replace(/"/g, '&quot;')}">
-                    <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
-                </div>
+                ${citationButtonHTML}
+                ${helpElementHTML}
             </div>
             <div class="citation-display" id="citation-${index}" style="display: none;"></div>
         `;
@@ -634,33 +899,62 @@ class QuotelyPopup {
         const copyBtn = quoteDiv.querySelector('.copy-btn');
         const citationBtn = quoteDiv.querySelector('.generate-citation-btn');
         const pinBtn = quoteDiv.querySelector('.quote-pin');
-        
+        const helpElement = quoteDiv.querySelector('.quote-help');
+
+        // Add ClickSpark effect to copy button
+        ClickSpark({
+            sparkColor: '#4287f5',
+            sparkSize: 15,
+            sparkRadius: 65,
+            sparkCount: 12,
+            duration: 300,
+            children: copyBtn
+        });
+
         copyBtn.addEventListener('click', () => {
             const quote = copyBtn.getAttribute('data-quote');
             this.copyQuote(quote);
         });
-        
+
         pinBtn.addEventListener('click', () => {
             const index = parseInt(pinBtn.getAttribute('data-index'));
             this.togglePin(index, pinBtn);
         });
-        
-        citationBtn.addEventListener('click', () => {
-            const index = parseInt(citationBtn.getAttribute('data-index'));
-            const title = citationBtn.getAttribute('data-title');
-            const url = citationBtn.getAttribute('data-url');
-            
-            // Check if citation already exists
-            const citationDisplay = document.getElementById(`citation-${index}`);
-            if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
-                // Citation exists, toggle it
-                this.toggleCitation(index);
-            } else {
-                // No citation exists, generate new one
-                this.generateCitation(index, title, url);
-            }
-        });
-        
+
+        if (citationBtn && !citationBtn.classList.contains('pdf-no-citation')) {
+            citationBtn.addEventListener('click', () => {
+                const index = parseInt(citationBtn.getAttribute('data-index'));
+                const title = citationBtn.getAttribute('data-title');
+                const url = citationBtn.getAttribute('data-url');
+
+                // Check if citation already exists
+                const citationDisplay = document.getElementById(`citation-${index}`);
+                if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
+                    // Citation exists, toggle it
+                    this.toggleCitation(index);
+                } else {
+                    // No citation exists, generate new one
+                    this.generateCitation(index, title, url);
+                }
+            });
+        }
+
+        // Special handling for first quote JS tooltip
+        if (helpElement && helpElement.classList.contains('js-tooltip')) {
+            helpElement.addEventListener('mouseenter', (e) => {
+                const rect = helpElement.getBoundingClientRect();
+                const tooltipText = helpElement.getAttribute('data-help');
+                // Position tooltip to the left of the question mark (bottom-left aligned)
+                const baseX = rect.left - 258; // 250px width + 8px offset to the left of the element
+                const baseY = rect.top; // Question mark's top edge (for bottom alignment calculation)
+                this.showTooltip(tooltipText, baseX, baseY);
+            });
+
+            helpElement.addEventListener('mouseleave', () => {
+                this.hideTooltip();
+            });
+        }
+
         return quoteDiv;
     }
 
@@ -857,8 +1151,14 @@ class QuotelyPopup {
 
     saveSession(quotes, pageTitle, pageUrl) {
         try {
+            // Ensure all quotes have the fromPdf flag before saving
+            const quotesWithPdfFlag = quotes.map(quote => ({
+                ...quote,
+                fromPdf: quote.fromPdf !== undefined ? quote.fromPdf : false
+            }));
+
             const sessionData = {
-                quotes: quotes,
+                quotes: quotesWithPdfFlag,
                 pageTitle: pageTitle,
                 pageUrl: pageUrl,
                 topic: this.topicInput.value.trim(),
@@ -894,7 +1194,12 @@ class QuotelyPopup {
             if (sessionData.quotes && sessionData.quotes.length > 0) {
                 this.lastPageTitle = sessionData.pageTitle;
                 this.lastPageUrl = sessionData.pageUrl;
-                this.displayQuotes(sessionData.quotes, sessionData.pageTitle, sessionData.pageUrl);
+                // Ensure fromPdf flag exists for all quotes
+                const quotesWithPdfFlag = sessionData.quotes.map(quote => ({
+                    ...quote,
+                    fromPdf: quote.fromPdf !== undefined ? quote.fromPdf : false
+                }));
+                this.displayQuotes(quotesWithPdfFlag, sessionData.pageTitle, sessionData.pageUrl);
             }
         } catch (error) {
             console.error('Failed to restore session:', error);
@@ -999,7 +1304,8 @@ class QuotelyPopup {
                     pageContent: content,
                     pageUrl: this.lastPageUrl,
                     pageTitle: this.lastPageTitle,
-                    isOCR: false // Segments are from regular extraction, not OCR
+                    isOCR: false, // Segments are from regular extraction, not OCR
+                    fromPdf: this.isPdfPage || false // Add flag indicating if content came from PDF
                 })
             });
 
@@ -1016,7 +1322,12 @@ class QuotelyPopup {
             if (data.quotes && data.quotes.length > 0) {
                 this.lastPageTitle = data.pageTitle || this.lastPageTitle;
                 this.lastPageUrl = data.pageUrl || this.lastPageUrl;
-                this.displayQuotes(data.quotes, this.lastPageTitle, this.lastPageUrl);
+                // Add fromPdf flag to all quotes (from server response)
+                const quotesWithMetadata = data.quotes.map(quote => ({
+                    ...quote,
+                    fromPdf: data.fromPdf !== undefined ? data.fromPdf : this.isPdfPage || false
+                }));
+                this.displayQuotes(quotesWithMetadata, this.lastPageTitle, this.lastPageUrl);
             } else {
                 this.showError('No relevant quotes found. Try a different topic or check if the page has relevant content.');
             }
@@ -1198,8 +1509,16 @@ class QuotelyPopup {
         quoteDiv.className = 'quote-item pinned';
         quoteDiv.setAttribute('data-pinned-id', uniqueId);
         
+        // Check if quote is from PDF to conditionally render citation button
+        const fromPdf = pinnedQuote.fromPdf || false;
+        const citationButtonHTML = fromPdf ?
+            `<button class="action-btn generate-citation-btn pdf-no-citation" disabled>Citation Unavailable</button>` :
+            `<button class="action-btn generate-citation-btn" data-pinned-id="${uniqueId}" data-title="${pinnedQuote.pageTitle.replace(/"/g, '&quot;')}" data-url="${pinnedQuote.url.replace(/"/g, '&quot;')}">
+                Generate Citation
+            </button>`;
+        
         quoteDiv.innerHTML = `
-            <div class="quote-pin" data-pinned-id="${uniqueId}" style="opacity: 1;">
+            <div class="quote-pin" data-pinned-id="${uniqueId}" data-from-pdf="${fromPdf}" style="opacity: 1;">
                 <img src="../media/Pin.png" alt="Pin" style="width: 16px; height: 19px;">
             </div>
             <div class="quote-text">"${pinnedQuote.quote}"</div>
@@ -1207,9 +1526,7 @@ class QuotelyPopup {
                 <button class="action-btn copy-btn" data-quote="${pinnedQuote.quote.replace(/"/g, '&quot;')}">
                     Copy Quote
                 </button>
-                <button class="action-btn generate-citation-btn" data-pinned-id="${uniqueId}" data-title="${pinnedQuote.pageTitle.replace(/"/g, '&quot;')}" data-url="${pinnedQuote.url.replace(/"/g, '&quot;')}">
-                    Generate Citation
-                </button>
+                ${citationButtonHTML}
                 <div class="quote-help" data-help="Pinned from ${pinnedQuote.pageTitle}">
                     <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
                 </div>
@@ -1222,6 +1539,16 @@ class QuotelyPopup {
         const citationBtn = quoteDiv.querySelector('.generate-citation-btn');
         const pinBtn = quoteDiv.querySelector('.quote-pin');
         
+        // Add ClickSpark effect to pinned copy button
+        ClickSpark({
+            sparkColor: '#fff',
+            sparkSize: 10,
+            sparkRadius: 15,
+            sparkCount: 8,
+            duration: 400,
+            children: copyBtn
+        });
+
         copyBtn.addEventListener('click', () => {
             const quote = copyBtn.getAttribute('data-quote');
             this.copyQuote(quote);
@@ -1237,21 +1564,23 @@ class QuotelyPopup {
             this.removePinnedQuote(uniqueId, pinnedQuote.quote);
         });
         
-        citationBtn.addEventListener('click', () => {
-            const pinnedId = citationBtn.getAttribute('data-pinned-id');
-            const title = citationBtn.getAttribute('data-title');
-            const url = citationBtn.getAttribute('data-url');
-            
-            // Check if citation already exists
-            const citationDisplay = document.getElementById(`citation-${pinnedId}`);
-            if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
-                // Citation exists, toggle it
-                this.toggleCitation(pinnedId);
-            } else {
-                // No citation exists, generate new one
-                this.generateCitation(pinnedId, title, url);
-            }
-        });
+        if (citationBtn && !citationBtn.classList.contains('pdf-no-citation')) {
+            citationBtn.addEventListener('click', () => {
+                const pinnedId = citationBtn.getAttribute('data-pinned-id');
+                const title = citationBtn.getAttribute('data-title');
+                const url = citationBtn.getAttribute('data-url');
+
+                // Check if citation already exists
+                const citationDisplay = document.getElementById(`citation-${pinnedId}`);
+                if (citationDisplay && citationDisplay.innerHTML.trim() !== '') {
+                    // Citation exists, toggle it
+                    this.toggleCitation(pinnedId);
+                } else {
+                    // No citation exists, generate new one
+                    this.generateCitation(pinnedId, title, url);
+                }
+            });
+        }
         
         // Restore citation if it exists
         if (pinnedQuote.citation) {
@@ -1314,6 +1643,7 @@ class QuotelyPopup {
                     const pinElement = quoteElement.querySelector('.quote-pin');
                     if (pinElement) {
                         const index = parseInt(pinElement.getAttribute('data-index'));
+                        const fromPdf = pinElement.getAttribute('data-from-pdf') === 'true';
                         const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
                         const citationDisplay = document.getElementById(`citation-${index}`);
                         const hasCitation = citationDisplay && citationDisplay.innerHTML.trim() !== '';
@@ -1325,6 +1655,7 @@ class QuotelyPopup {
                             pageTitle: this.lastPageTitle,
                             citation: hasCitation ? citationDisplay.innerHTML : null,
                             citationVisible: hasCitation && citationDisplay.style.display !== 'none',
+                            fromPdf: fromPdf,
                             timestamp: Date.now()
                         };
                         
@@ -1527,6 +1858,9 @@ class QuotelyPopup {
                 return;
             }
             
+            const pinElement = quoteElement.querySelector('.quote-pin');
+            const fromPdf = pinElement.getAttribute('data-from-pdf') === 'true';
+            
             const quoteText = quoteElement.querySelector('.quote-text').textContent.replace(/"/g, '');
             const citationDisplay = document.getElementById(`citation-${index}`);
             const hasCitation = citationDisplay && citationDisplay.innerHTML.trim() !== '';
@@ -1538,6 +1872,7 @@ class QuotelyPopup {
                 pageTitle: this.lastPageTitle,
                 citation: hasCitation ? citationDisplay.innerHTML : null,
                 citationVisible: hasCitation && citationDisplay.style.display !== 'none',
+                fromPdf: fromPdf,
                 timestamp: Date.now()
             };
             

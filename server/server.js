@@ -256,9 +256,9 @@ function logPromptToCsv(topic, pageTitle, pageUrl) {
 // Quote extraction and analysis endpoint
 app.post('/api/find-quotes', async (req, res) => {
   try {
-    const { topic, pageContent, pageUrl, pageTitle, isOCR } = req.body;
-    if (Debugging) console.log(`[DEBUG] /api/find-quotes - Topic: "${topic}", URL: ${pageUrl}, Content length: ${pageContent?.length || 0}, OCR: ${isOCR}`);
-    
+    const { topic, pageContent, pageUrl, pageTitle, isOCR, fromPdf } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/find-quotes - Topic: "${topic}", URL: ${pageUrl}, Content length: ${pageContent?.length || 0}, OCR: ${isOCR}, From PDF: ${fromPdf}`);
+
     if (!topic || !pageContent) {
       return res.status(400).json({ error: 'Topic and page content are required' });
     }
@@ -401,8 +401,11 @@ app.post('/api/find-quotes', async (req, res) => {
     
     const systemPrompt = `You are a quote analysis assistant. Your task is to:
     - Find quotes that are HIGHLY SPECIFIC to the topic provided by the user
-    - Only select quotes that directly mention or discuss the specific topic keywords
-    - Do NOT include general quotes about the broader subject area unless they specifically mention the topic keywords
+    - Only select quotes that DIRECTLY mention or discuss the EXACT topic keywords provided
+    - EXCLUDE any quotes that do not explicitly mention the topic or are only tangentially related
+    - Do NOT include general quotes about the broader subject area unless they specifically use the exact topic keywords
+    - Do NOT include quotes that are merely contextually related without directly addressing the topic
+    - If no quotes are highly relevant to the specific topic, return an empty array
     - Preserve the original wording exactly as it appears in the text${ocrNote}
     - For each quote, provide a brief explanation of why it's specifically relevant to the topic
     - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
@@ -458,7 +461,8 @@ app.post('/api/find-quotes', async (req, res) => {
     res.json({
       quotes: analyzedQuotes,
       pageTitle: pageTitle || 'Current Page',
-      pageUrl: pageUrl || 'Unknown URL'
+      pageUrl: pageUrl || 'Unknown URL',
+      fromPdf: fromPdf || false // Flag indicating if quotes came from PDF processing
     });
 
   } catch (error) {
@@ -602,6 +606,13 @@ app.post('/api/extract-pdf', async (req, res) => {
             });
           }
 
+          // Log all extracted PDF text
+          if (Debugging) {
+            console.log(`[DEBUG] ========== PDF TEXT EXTRACTED ==========`);
+            console.log(extractedText);
+            console.log(`[DEBUG] ========== END PDF TEXT ==========`);
+          }
+
           // Detect if this is a scanned PDF (very little text extracted)
           const avgCharsPerPage = pageCount > 0 ? extractedText.length / pageCount : 0;
           const isScannedPDF = pageCount > 0 && avgCharsPerPage < 500; // Less than 500 chars per page suggests scanned PDF
@@ -637,6 +648,13 @@ app.post('/api/extract-pdf', async (req, res) => {
                 // Mark that OCR was used
                 ocrWasUsed = true;
                 
+                // Log OCR extracted text
+                if (Debugging) {
+                  console.log(`[DEBUG] ========== OCR TEXT EXTRACTED ==========`);
+                  console.log(extractedText);
+                  console.log(`[DEBUG] ========== END OCR TEXT ==========`);
+                }
+                
                 // Cache the OCR result
                 cachePdfContent(url, extractedText, true);
                 
@@ -648,11 +666,13 @@ app.post('/api/extract-pdf', async (req, res) => {
 
           // Check if PDF is very large (> 50,000 characters)
           const SEGMENT_SIZE = 50000;
-          // Use URL for remote files, or generate a cache key for local files
-          const cacheKey = url || `local_${title}_${Date.now()}`;
+          // Use URL for remote files, or generate a stable cache key for local files
+          // Use title + first 100 chars as a more stable identifier
+          const cacheKey = url || `local_${title}_${extractedText.substring(0, 100).replace(/[^a-zA-Z0-9]/g, '')}`;
           
           if (extractedText.length > SEGMENT_SIZE) {
             if (Debugging) console.log(`[DEBUG] PDF is large (${extractedText.length} chars), creating ${Math.ceil(extractedText.length / SEGMENT_SIZE)} segments`);
+            if (Debugging) console.log(`[DEBUG] Using cache key: ${cacheKey}`);
             // Cache the full content for later segment retrieval
             cachePdfContent(cacheKey, extractedText, ocrWasUsed);
             
@@ -716,11 +736,15 @@ app.post('/api/get-pdf-segment', async (req, res) => {
     }
 
     // Retrieve cached content
+    if (Debugging) console.log(`[DEBUG] Looking for cached content with key: ${pdfUrl}`);
     const cached = getCachedPdfContent(pdfUrl);
     
     if (!cached) {
+      if (Debugging) console.log(`[DEBUG] Cache miss for key: ${pdfUrl}`);
       return res.status(404).json({ error: 'PDF content not found in cache. Please re-extract the PDF.' });
     }
+    
+    if (Debugging) console.log(`[DEBUG] Cache hit! Found ${cached.content.length} characters`);
 
     const SEGMENT_SIZE = 50000;
     const start = segmentIndex * SEGMENT_SIZE;

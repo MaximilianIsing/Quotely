@@ -35,6 +35,10 @@ body {
     height: 365px;
 }
 
+.container.pdf-upload-expanded {
+    height: 355px;
+}
+
 .header {
     background: #2563eb;
     color: white;
@@ -303,9 +307,30 @@ body {
 }
 
 .action-btn:hover {
-    background: #2563eb;
-    color: white;
-    border-color: #2563eb;
+    background: #e5e7eb;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.generate-citation-btn:hover {
+    background: #e5e7eb;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.pdf-no-citation {
+    background: #f3f4f6 !important;
+    color: #6b7280 !important;
+    border-color: #d1d5db !important;
+    cursor: not-allowed !important;
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+}
+
+.pdf-no-citation:hover {
+    background: #f3f4f6 !important;
+    color: #6b7280 !important;
+    border-color: #d1d5db !important;
 }
 
 .copy-btn {
@@ -317,6 +342,37 @@ body {
 .copy-btn:hover {
     background: #1d4ed8;
     border-color: #1d4ed8;
+    color: white !important;
+}
+
+/* Click Spark - Canvas based (no CSS needed for animation) */
+
+/* PDF File Drop Area (inline style matching segment selector) */
+.pdf-file-drop-area {
+    border: 2px dashed #d1d5db;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    background: #f9fafb;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pdf-file-drop-area:hover {
+    border-color: #2563eb;
+    background: #eff6ff;
+}
+
+.pdf-file-drop-area.drag-over {
+    border-color: #2563eb;
+    background: #dbeafe;
+    border-style: solid;
+}
+
+.drop-area-text {
+    font-size: 14px;
+    color: #6b7280;
+    pointer-events: none;
 }
 
 /* Question mark image for reasoning tooltip */
@@ -372,6 +428,11 @@ body {
 .quote-help:hover::after {
     opacity: 1;
     transform: translateY(30px) translateX(-8px);
+}
+
+/* Hide CSS tooltip for first quote since it uses JS tooltip */
+.quote-item:first-child .quote-help::after {
+    display: none;
 }
 
 .citation-display {
