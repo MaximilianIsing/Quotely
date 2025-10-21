@@ -105,26 +105,41 @@ class QuotelyPopup {
                     
                     // Check if it's a local file
                     if (tab.url.startsWith('file://')) {
-                        // Local PDFs require drag & drop (can't fetch due to security)
-                        this.setLoading(false);
-                        const droppedFile = await this.showPdfDropzone(tab.title);
+                        // Check if we've already uploaded this PDF
+                        const uploadedPdfInfo = await this.getUploadedPdfInfo(tab.url);
                         
-                        if (!droppedFile) {
-                            // User cancelled or closed dropzone
-                            return;
+                        let base64Pdf, pdfTitle;
+                        
+                        if (uploadedPdfInfo) {
+                            // PDF was already uploaded, skip dropzone
+                            base64Pdf = uploadedPdfInfo.fileContent;
+                            pdfTitle = uploadedPdfInfo.title;
+                        } else {
+                            // Local PDFs require drag & drop (can't fetch due to security)
+                            this.setLoading(false);
+                            const droppedFile = await this.showPdfDropzone(tab.title);
+                            
+                            if (!droppedFile) {
+                                // User cancelled or closed dropzone
+                                return;
+                            }
+                            
+                            // Read the dropped file and convert to base64
+                            this.setLoading(true);
+                            const arrayBuffer = await droppedFile.arrayBuffer();
+                            base64Pdf = btoa(
+                                new Uint8Array(arrayBuffer)
+                                    .reduce((data, byte) => data + String.fromCharCode(byte), '')
+                            );
+                            pdfTitle = tab.title || 'Local PDF';
+                            
+                            // Save this PDF info for future use
+                            await this.saveUploadedPdfInfo(tab.url, base64Pdf, pdfTitle);
                         }
-                        
-                        // Read the dropped file and convert to base64
-                        this.setLoading(true);
-                        const arrayBuffer = await droppedFile.arrayBuffer();
-                        const base64Pdf = btoa(
-                            new Uint8Array(arrayBuffer)
-                                .reduce((data, byte) => data + String.fromCharCode(byte), '')
-                        );
                         
                         requestBody = {
                             fileContent: base64Pdf,
-                            title: tab.title || 'Local PDF',
+                            title: pdfTitle,
                             isLocalFile: true
                         };
                     } else {
@@ -718,6 +733,43 @@ class QuotelyPopup {
 
     clearPdfUploadState() {
         chrome.storage.local.remove(['quotely_pdf_upload_mode']);
+    }
+
+    async saveUploadedPdfInfo(pdfUrl, fileContent, title) {
+        try {
+            await chrome.storage.local.set({
+                [`quotely_uploaded_pdf_${pdfUrl}`]: {
+                    fileContent: fileContent,
+                    title: title,
+                    timestamp: Date.now()
+                }
+            });
+        } catch (error) {
+            console.error('Failed to cache PDF:', error);
+        }
+    }
+
+    async getUploadedPdfInfo(pdfUrl) {
+        try {
+            const result = await chrome.storage.local.get([`quotely_uploaded_pdf_${pdfUrl}`]);
+            const pdfInfo = result[`quotely_uploaded_pdf_${pdfUrl}`];
+            
+            if (pdfInfo) {
+                // Check if cache is still fresh (24 hours)
+                const age = Date.now() - pdfInfo.timestamp;
+                if (age < 24 * 60 * 60 * 1000) {
+                    return pdfInfo;
+                } else {
+                    // Cache expired, remove it
+                    await chrome.storage.local.remove([`quotely_uploaded_pdf_${pdfUrl}`]);
+                    return null;
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error('Failed to get cached PDF:', error);
+            return null;
+        }
     }
 
     clearPdfDropzone() {
