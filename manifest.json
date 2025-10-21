@@ -29,13 +29,6 @@
     "48": "media/Logo64x64.png",
     "128": "media/Logo128x128.png"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["public/content.js"],
-      "css": ["public/content.css"]
-    }
-  ],
   "background": {
     "service_worker": "public/background.js"
   },
