@@ -16,7 +16,41 @@
                 <img src="../media/Logo32x32.png" alt="Quotely Logo" class="logo-img">
                 <h1>Quotely</h1>
             </div>
-            <p class="subtitle">AI-Powered Quote Finder</p>
+            <div class="header-controls">
+                <button id="settings-btn" class="settings-btn" title="Settings">
+                    <img src="../media/settings/Gear.png" alt="Settings" class="settings-icon">
+                </button>
+                <!-- Settings Dropdown -->
+                <div id="settings-popup" class="settings-popup">
+                    <div class="settings-content">
+                        <h3 class="settings-title">Settings</h3>
+                        <div class="settings-body">
+                            <div class="setting-item">
+                                <div class="theme-toggle">
+                                    <img src="../media/settings/Sun.png" alt="Light" class="theme-icon sun-icon">
+                                    <input type="checkbox" id="theme-toggle" class="theme-toggle-input">
+                                    <div class="theme-toggle-slider">
+                                        <div class="theme-toggle-thumb"></div>
+                                    </div>
+                                    <img src="../media/settings/Moon.png" alt="Dark" class="theme-icon moon-icon">
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <div class="specificity-control">
+                                    <label class="specificity-label">Quote Specificity</label>
+                                    <div class="segmented-control">
+                                        <button class="segmented-btn" data-value="broad">Broad</button>
+                                        <button class="segmented-btn active" data-value="balanced">Balanced</button>
+                                        <button class="segmented-btn" data-value="precise">Precise</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="contact-info">quotelyteam@gmail.com for inquiries</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p class="subtitle">AI Quote Finder</p>
         </header>
 
         <main class="main-content">
@@ -37,7 +71,7 @@
 
             <div class="results-section" id="results-section" style="display: none;">
                 <div class="results-header">
-                    <h3>Found Quotes</h3>
+                    <h3>Found Quotes <span id="quote-count" class="quote-count">(0)</span></h3>
                     <div class="citation-format-selector">
                         <label for="citation-format">Citation Format:</label>
                         <select id="citation-format" class="format-select">
@@ -57,7 +91,7 @@
         </main>
 
         <footer class="footer">
-            <p>Quotely 2025 • Find quotes instantly • v1.04</p>
+            <p>Quotely 2025 • Find quotes instantly • v1.05</p>
         </footer>
     </div>
 

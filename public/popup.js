@@ -16,6 +16,9 @@ class QuotelyPopup {
         this.restoreLastSession();
         this.checkPendingSegmentSelection();
         this.checkPdfUploadMode();
+        this.restoreSettingsState();
+        this.restoreTheme();
+        this.restoreSpecificity();
 
     }
 
@@ -43,6 +46,69 @@ class QuotelyPopup {
             this.saveCurrentInput();
         });
         this.citationFormat.addEventListener('change', () => this.updateAllCitations());
+        
+        // Settings button event listeners
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsPopup = document.getElementById('settings-popup');
+        
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', () => this.toggleSettings());
+        }
+        
+        // Theme toggle event listener
+        const themeToggle = document.getElementById('theme-toggle');
+        if (themeToggle) {
+            themeToggle.addEventListener('change', () => this.toggleTheme());
+        }
+        
+        // Add click event to slider container and entire theme toggle to toggle checkbox
+        const themeToggleContainer = document.querySelector('.theme-toggle');
+        if (themeToggleContainer && themeToggle) {
+            themeToggleContainer.addEventListener('click', (e) => {
+                // Only toggle if clicking on the slider area, not the icons
+                if (e.target.classList.contains('theme-toggle-slider') || 
+                    e.target.closest('.theme-toggle-slider') ||
+                    e.target.classList.contains('theme-toggle-thumb') ||
+                    e.target.closest('.theme-toggle-thumb')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    themeToggle.checked = !themeToggle.checked;
+                    // Trigger the change event
+                    themeToggle.dispatchEvent(new Event('change'));
+                }
+            });
+        }
+        
+        // Segmented control button click handlers
+        const segmentedButtons = document.querySelectorAll('.segmented-btn');
+        segmentedButtons.forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // Remove active class from all buttons
+                segmentedButtons.forEach(btn => btn.classList.remove('active'));
+                
+                // Add active class to clicked button
+                button.classList.add('active');
+                
+                // Save the selected specificity value
+                const value = button.dataset.value;
+                localStorage.setItem('quotely_specificity', value);
+            });
+        });
+        
+        // Click outside to close settings
+        document.addEventListener('click', (e) => {
+            const settingsBtn = document.getElementById('settings-btn');
+            const settingsPopup = document.getElementById('settings-popup');
+            
+            if (settingsPopup && settingsPopup.classList.contains('show')) {
+                if (!settingsBtn.contains(e.target) && !settingsPopup.contains(e.target)) {
+                    this.hideSettings();
+                }
+            }
+        });
     }
 
     autoResizeTextarea() {
@@ -92,13 +158,91 @@ class QuotelyPopup {
             // Get current tab information
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             
-            // Check if this is a PDF page
+            // Check if this is a PDF page or docviewer page
             const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
-            this.isPdfPage = isPDF; // Store PDF status
+            const isDocviewer = tab.url && tab.url.includes('viewer');
+            this.isPdfPage = isPDF || isDocviewer; // Store PDF/docviewer status
 
             let pageData;
 
-            if (isPDF) {
+            if (isDocviewer) {
+                // For docviewer pages, always show PDF upload dropzone
+                this.setLoading(false);
+                const droppedFile = await this.showPdfDropzone(tab.title || 'Document Viewer');
+                
+                if (!droppedFile) {
+                    // User cancelled or closed dropzone
+                    return;
+                }
+                
+                // Read the dropped file and convert to base64
+                this.setLoading(true);
+                const arrayBuffer = await droppedFile.arrayBuffer();
+                const base64Pdf = btoa(
+                    new Uint8Array(arrayBuffer)
+                        .reduce((data, byte) => data + String.fromCharCode(byte), '')
+                );
+                const pdfTitle = tab.title || 'Document Viewer';
+                
+                // Send to server for PDF extraction
+                const pdfResponse = await fetch(`${this.serverUrl}/api/extract-pdf`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        fileContent: base64Pdf,
+                        title: pdfTitle,
+                        isLocalFile: true
+                    })
+                });
+                
+                if (pdfResponse.ok) {
+                    pageData = await pdfResponse.json();
+                    // Check if PDF requires segmentation
+                    if (pageData.requiresSegmentation) {
+                        // Temporarily stop loading to show segment selector
+                        this.setLoading(false);
+                        
+                        // Show segment selection UI for PDF
+                        const selectedSegmentIndex = await this.showPdfSegmentSelector(pageData, pageData.url);
+                        if (selectedSegmentIndex === null) {
+                            // User cancelled
+                            return;
+                        }
+                        
+                        // Request the specific segment from server
+                        const segmentResponse = await fetch(`${this.serverUrl}/api/get-pdf-segment`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                pdfUrl: pageData.url,
+                                segmentIndex: selectedSegmentIndex
+                            })
+                        });
+                        
+                        if (!segmentResponse.ok) {
+                            throw new Error(`Segment retrieval failed: ${segmentResponse.status}`);
+                        }
+                        
+                        const segmentData = await segmentResponse.json();
+                        
+                        // Set pageData with the segment content
+                        pageData = {
+                            content: segmentData.content,
+                            title: pageData.title,
+                            url: pageData.url
+                        };
+                        
+                        // Resume loading for quote finding
+                        this.setLoading(true);
+                    }
+                } else {
+                    throw new Error(`PDF extraction failed: ${pdfResponse.status}`);
+                }
+            } else if (isPDF) {
                 // For PDFs, handle local vs remote files differently
                 try {
                     let requestBody;
@@ -353,6 +497,13 @@ class QuotelyPopup {
             this.lastPageTitle = pageData.title || 'Current Page';
             this.lastPageUrl = pageData.url || 'Unknown URL';
             
+            // Check if this appears to be a protected site with limited content
+            if (this.isProtectedSite(pageData)) {
+                this.setLoading(false);
+                this.showError('This site is protected. Download the content locally or try a different page.');
+                return;
+            }
+            
             // Check if content is very large (> 50,000 characters) - for both PDF and HTML
             if (pageData.content && pageData.content.length > 50000) {
 
@@ -383,6 +534,9 @@ class QuotelyPopup {
             const limitedContent = (pageData.content || '').slice(0, 50000);
             
 
+            // Get quote specificity setting
+            const specificity = localStorage.getItem('quotely_specificity') || 'balanced';
+            
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
                 method: 'POST',
@@ -395,7 +549,8 @@ class QuotelyPopup {
                     pageUrl: this.lastPageUrl,
                     pageTitle: this.lastPageTitle,
                     isOCR: pageData.isOCR || false,
-                    fromPdf: this.isPdfPage || false // Add flag indicating if content came from PDF
+                    fromPdf: this.isPdfPage || false, // Add flag indicating if content came from PDF
+                    specificity: specificity // Include specificity setting
                 })
             });
 
@@ -868,6 +1023,12 @@ class QuotelyPopup {
 
     displayQuotes(quotes, pageTitle, pageUrl) {
         this.quotesContainer.innerHTML = '';
+        
+        // Update quote count
+        const quoteCountElement = document.getElementById('quote-count');
+        if (quoteCountElement) {
+            quoteCountElement.textContent = `(${quotes.length})`;
+        }
         
         // Show the results header (Found Quotes and Citation Format)
         const resultsHeader = document.querySelector('.results-header');
@@ -1345,6 +1506,9 @@ class QuotelyPopup {
             this.lastPageTitle = pageData.title;
             this.lastPageUrl = pageData.url;
             
+            // Get quote specificity setting
+            const specificity = localStorage.getItem('quotely_specificity') || 'balanced';
+            
             // Send to server for analysis
             const response = await fetch(`${this.serverUrl}/api/find-quotes`, {
                 method: 'POST',
@@ -1357,7 +1521,8 @@ class QuotelyPopup {
                     pageUrl: this.lastPageUrl,
                     pageTitle: this.lastPageTitle,
                     isOCR: false, // Segments are from regular extraction, not OCR
-                    fromPdf: this.isPdfPage || false // Add flag indicating if content came from PDF
+                    fromPdf: this.isPdfPage || false, // Add flag indicating if content came from PDF
+                    specificity: specificity // Include specificity setting
                 })
             });
 
@@ -1593,11 +1758,11 @@ class QuotelyPopup {
         
         // Add ClickSpark effect to pinned copy button
         ClickSpark({
-            sparkColor: '#fff',
-            sparkSize: 10,
-            sparkRadius: 15,
-            sparkCount: 8,
-            duration: 400,
+            sparkColor: '#4287f5',
+            sparkSize: 15,
+            sparkRadius: 65,
+            sparkCount: 12,
+            duration: 300,
             children: copyBtn
         });
 
@@ -2050,6 +2215,188 @@ class QuotelyPopup {
             this.restoreCitations();
         } catch (error) {
             console.error('Failed to restore pinned state:', error);
+        }
+    }
+
+    isProtectedSite(pageData) {
+        if (!pageData || !pageData.content) {
+            return true;
+        }
+        
+        const content = pageData.content.toLowerCase();
+        const contentLength = pageData.content.length;
+        
+        // If content is more than 400 characters, it's considered legitimate
+        if (contentLength > 400) {
+            return false;
+        }
+        
+        // If content is 400 characters or less, check for protection indicators
+        const protectedIndicators = [
+            'sign in to continue',
+            'log in to access',
+            'subscription required',
+            'premium content',
+            'paywall',
+            'please log in',
+            'access denied',
+            'members only',
+            'subscribe to read',
+            'login required',
+            'authentication required',
+            'please sign in',
+            'register to continue',
+            '0:000:00',
+            'want to print',
+            'create account',
+            'free trial',
+            'upgrade to premium',
+            'content locked',
+            'restricted access',
+            'login to view',
+            'sign up to read',
+            'subscription needed',
+            'premium subscription',
+            'unlock this article',
+            'continue reading with',
+            'read more with subscription',
+            'limited preview',
+            'sample content only',
+            'partial content',
+            'excerpt only'
+        ];
+        
+        // Check if content contains any protected site indicators
+        for (const indicator of protectedIndicators) {
+            if (content.includes(indicator)) {
+                return true;
+            }
+        }
+        
+        // Check for strong paywall patterns
+        const strongPaywallPatterns = [
+            /you have reached your.*free.*article.*limit/i,
+            /free articles remaining/i,
+            /subscribe to continue reading/i,
+            /unlock.*articles.*with.*subscription/i,
+            /premium.*subscription.*required/i,
+            /members.*only.*content/i,
+            /login.*required.*to.*view/i,
+            /sign.*in.*to.*continue.*reading/i
+        ];
+        
+        for (const pattern of strongPaywallPatterns) {
+            if (pattern.test(content)) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    showSettings() {
+        const settingsPopup = document.getElementById('settings-popup');
+        const settingsBtn = document.getElementById('settings-btn');
+        if (settingsPopup) {
+            settingsPopup.classList.add('show');
+        }
+        if (settingsBtn) {
+            settingsBtn.classList.add('rotated');
+        }
+        // Save settings state
+        localStorage.setItem('quotely_settings_open', 'true');
+    }
+
+    hideSettings() {
+        const settingsPopup = document.getElementById('settings-popup');
+        const settingsBtn = document.getElementById('settings-btn');
+        if (settingsPopup) {
+            settingsPopup.classList.remove('show');
+        }
+        if (settingsBtn) {
+            settingsBtn.classList.remove('rotated');
+        }
+        // Save settings state
+        localStorage.setItem('quotely_settings_open', 'false');
+    }
+
+    toggleSettings() {
+        const settingsPopup = document.getElementById('settings-popup');
+        if (settingsPopup && settingsPopup.classList.contains('show')) {
+            this.hideSettings();
+        } else {
+            this.showSettings();
+        }
+    }
+
+    restoreSettingsState() {
+        try {
+            const settingsOpen = localStorage.getItem('quotely_settings_open');
+            if (settingsOpen === 'true') {
+                this.showSettings();
+            }
+        } catch (error) {
+            console.error('Failed to restore settings state:', error);
+        }
+    }
+
+    toggleTheme() {
+        const themeToggle = document.getElementById('theme-toggle');
+        const isDarkMode = themeToggle.checked;
+        
+        // Save theme preference
+        localStorage.setItem('quotely_dark_mode', isDarkMode ? 'true' : 'false');
+        
+        // Apply dark mode to the popup
+        this.applyTheme(isDarkMode);
+        
+        console.log('Theme toggle:', isDarkMode ? 'Dark Mode' : 'Light Mode');
+    }
+
+    applyTheme(isDarkMode) {
+        const container = document.querySelector('.container');
+        if (isDarkMode) {
+            container.classList.add('dark-mode');
+        } else {
+            container.classList.remove('dark-mode');
+        }
+    }
+
+    restoreTheme() {
+        try {
+            const darkMode = localStorage.getItem('quotely_dark_mode');
+            const isDarkMode = darkMode === 'true';
+            
+            // Set the toggle state
+            const themeToggle = document.getElementById('theme-toggle');
+            if (themeToggle) {
+                themeToggle.checked = isDarkMode;
+            }
+            
+            // Apply the theme
+            this.applyTheme(isDarkMode);
+        } catch (error) {
+            console.error('Failed to restore theme:', error);
+        }
+    }
+
+    restoreSpecificity() {
+        try {
+            const specificity = localStorage.getItem('quotely_specificity');
+            if (specificity) {
+                // Find the button with matching data-value
+                const segmentedButtons = document.querySelectorAll('.segmented-btn');
+                segmentedButtons.forEach(button => {
+                    if (button.dataset.value === specificity) {
+                        // Remove active class from all buttons
+                        segmentedButtons.forEach(btn => btn.classList.remove('active'));
+                        // Add active class to the matching button
+                        button.classList.add('active');
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Failed to restore specificity:', error);
         }
     }
 }

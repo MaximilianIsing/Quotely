@@ -8,6 +8,7 @@ const config = require('./config');
 const fs = require('fs');
 const path = require('path');
 const { generateCitation } = require('./citation-generator');
+const gptPrompts = require('./gptprompts');
 
 // Debugging flag - read from debugtoggle.txt (must be 'true' or 'false')
 let Debugging = false; // default value
@@ -22,6 +23,11 @@ try {
   }
 } catch (error) {
   console.warn('Could not read debugtoggle.txt, using default value (false):', error.message);
+}
+
+// Log loaded GPT prompts
+if (Debugging) {
+  console.log(`[DEBUG] Loaded GPT prompts: ${Object.keys(gptPrompts).join(', ')}`);
 }
 
 // For PDF processing
@@ -256,8 +262,8 @@ function logPromptToCsv(topic, pageTitle, pageUrl) {
 // Quote extraction and analysis endpoint
 app.post('/api/find-quotes', async (req, res) => {
   try {
-    const { topic, pageContent, pageUrl, pageTitle, isOCR, fromPdf } = req.body;
-    if (Debugging) console.log(`[DEBUG] /api/find-quotes - Topic: "${topic}", URL: ${pageUrl}, Content length: ${pageContent?.length || 0}, OCR: ${isOCR}, From PDF: ${fromPdf}`);
+    const { topic, pageContent, pageUrl, pageTitle, isOCR, fromPdf, specificity } = req.body;
+    if (Debugging) console.log(`[DEBUG] /api/find-quotes - Topic: "${topic}", URL: ${pageUrl}, Content length: ${pageContent?.length || 0}, OCR: ${isOCR}, From PDF: ${fromPdf}, Specificity: ${specificity}`);
 
     if (!topic || !pageContent) {
       return res.status(400).json({ error: 'Topic and page content are required' });
@@ -289,10 +295,26 @@ app.post('/api/find-quotes', async (req, res) => {
       .filter(s => s.length > 20);
     if (Debugging) console.log(`[DEBUG] Split content into ${sentences.length} sentences`);
     
+    // Determine specificity settings (default to balanced)
+    const specificityValue = specificity || 'balanced';
+    let fuzzyThreshold, fuzzyMinScore;
+    if (specificityValue === 'broad') {
+      fuzzyThreshold = 0.4;  // Loose matching (lower = more permissive)
+      fuzzyMinScore = 0.1;   // Lower minimum fuzzy score required
+    } else if (specificityValue === 'precise') {
+      fuzzyThreshold = 0.8;  // Strict matching (higher = less permissive)
+      fuzzyMinScore = 0.6;   // Higher minimum fuzzy score required
+    } else {
+      // balanced (default)
+      fuzzyThreshold = 0.6;
+      fuzzyMinScore = 0.3;
+    }
+    if (Debugging) console.log(`[DEBUG] Specificity: ${specificityValue}, Fuzzy threshold: ${fuzzyThreshold}, Min score: ${fuzzyMinScore}`);
+    
     // Use Fuse.js for fuzzy matching (items are plain strings, so no keys)
   let fuse = new Fuse(sentences, {
       includeScore: true,
-      threshold: 0.6  // More loose matching (lower = more permissive)
+      threshold: fuzzyThreshold
     });
     
     const searchResults = fuse.search(topic);
@@ -350,12 +372,11 @@ app.post('/api/find-quotes', async (req, res) => {
     // Sort by score desc
     scored.sort((a, b) => b.score - a.score);
 
-    // Filter to sentences with any relevance signal - be more permissive
-    // Allow fuzzy matching alone with a decent score, or any keyword/topic matches
+    // Filter to sentences with any relevance signal - adjust based on specificity
     let filtered = scored.filter(e => 
       e.exactTopicMatch > 0 ||  // Contains exact topic
       e.keywordHits > 0 ||  // Has any keyword hits
-      e.fuzzy >= 0.3 ||  // Fuzzy match alone with decent similarity (30%+)
+      e.fuzzy >= fuzzyMinScore ||  // Fuzzy match alone with decent similarity
       e.score > 0.8  // Any decent overall score
     );
     
@@ -399,15 +420,14 @@ app.post('/api/find-quotes', async (req, res) => {
     // Use GPT to analyze and refine quotes (single call)
     const ocrNote = isOCR ? '\n\nIMPORTANT: This text was extracted using OCR (Optical Character Recognition) and may contain spelling or grammar errors. Please correct any obvious spelling and grammar mistakes in the quotes while preserving the original meaning and intent.' : '';
     
+    // Get specificity instruction from loaded prompts
+    const specificityInstruction = gptPrompts[specificityValue] || gptPrompts.balanced;
+    
     const systemPrompt = `You are a quote analysis assistant. Your task is to:
-    - Find quotes that are HIGHLY SPECIFIC to the topic provided by the user
-    - Only select quotes that DIRECTLY mention or discuss the EXACT topic keywords provided
-    - EXCLUDE any quotes that do not explicitly mention the topic or are only tangentially related
-    - Do NOT include general quotes about the broader subject area unless they specifically use the exact topic keywords
-    - Do NOT include quotes that are merely contextually related without directly addressing the topic
+    ${specificityInstruction}
     - If no quotes are highly relevant to the specific topic, return an empty array
     - Preserve the original wording exactly as it appears in the text${ocrNote}
-    - For each quote, provide a brief explanation of why it's specifically relevant to the topic
+    - For each quote, provide a brief explanation of why it's relevant to the topic
     - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
 
     const userContent = `Topic: "${topic}"\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
