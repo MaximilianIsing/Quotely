@@ -652,8 +652,16 @@ body {
     flex-direction: column;
     height: 100%;
     overflow: hidden;
+    position: relative;
 }
 
+.segment-help {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    cursor: help;
+    z-index: 10;
+}
 
 .segment-selector p {
     color: #6b7280;
@@ -877,7 +885,7 @@ body {
 }
 
 .dark-mode .find-quotes-btn:hover:not(:disabled) {
-    background: #2563eb;
+    background: #1d4ed8;
 }
 
 .dark-mode .btn:disabled {

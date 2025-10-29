@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://quotely-rmgh.onrender.com'; //https://quotely-rmgh.onrender.com
+        this.serverUrl = 'http://localhost:3000'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.isPdfPage = false; // Track if current page is a PDF
@@ -160,7 +160,7 @@ class QuotelyPopup {
             
             // Check if this is a PDF page or docviewer page
             const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
-            const isDocviewer = tab.url && tab.url.includes('viewer');
+            const isDocviewer = tab.url && (tab.url.includes('viewer') || tab.url.includes('drive.google.com'));
             this.isPdfPage = isPDF || isDocviewer; // Store PDF/docviewer status
 
             let pageData;
@@ -426,33 +426,47 @@ class QuotelyPopup {
                         if (!mainContent) {
                             const body = doc.body;
                             if (body) {
-                                const allDivs = body.querySelectorAll('div, section, p');
-                                let bestCandidate = null;
-                                let maxScore = 0;
+                                // Check if this looks like a Project Gutenberg or similar full-text page
+                                const bodyText = body.textContent.trim();
+                                const isFullTextPage = bodyText.length > 200000 || 
+                                    body.querySelector('h1, h2, h3') || 
+                                    body.querySelector('chapter') ||
+                                    bodyText.includes('Chapter') ||
+                                    bodyText.includes('CHAPTER');
                                 
-                                allDivs.forEach(el => {
-                                    const text = el.textContent.trim();
-                                    const textLength = text.length;
-                                
-                                    // Skip if too short or too long
-                                    if (textLength < 200 || textLength > 100000) return;
+                                if (isFullTextPage) {
+                                    // For full-text pages, use the body content directly
+                                    mainContent = body;
+                                } else {
+                                    // For regular pages, find the best content section
+                                    const allDivs = body.querySelectorAll('div, section, p');
+                                    let bestCandidate = null;
+                                    let maxScore = 0;
                                     
-                                    // Calculate content score (like Beautiful Soup)
-                                    const links = el.querySelectorAll('a').length;
-                                    const paragraphs = el.querySelectorAll('p').length;
-                                    const images = el.querySelectorAll('img').length;
+                                    allDivs.forEach(el => {
+                                        const text = el.textContent.trim();
+                                        const textLength = text.length;
                                     
-                                    // Higher score for more paragraphs and fewer links/images
-                                    const score = paragraphs * 3 - links - images * 2 + (textLength / 100);
+                                        // Skip if too short or too long
+                                        if (textLength < 200 || textLength > 100000) return;
+                                        
+                                        // Calculate content score (like Beautiful Soup)
+                                        const links = el.querySelectorAll('a').length;
+                                        const paragraphs = el.querySelectorAll('p').length;
+                                        const images = el.querySelectorAll('img').length;
+                                        
+                                        // Higher score for more paragraphs and fewer links/images
+                                        const score = paragraphs * 3 - links - images * 2 + (textLength / 100);
+                                        
+                                        if (score > maxScore) {
+                                            maxScore = score;
+                                            bestCandidate = el;
+                                        }
+                                    });
                                     
-                                    if (score > maxScore) {
-                                        maxScore = score;
-                                        bestCandidate = el;
+                                    if (bestCandidate) {
+                                        mainContent = bestCandidate;
                                     }
-                                });
-                                
-                                if (bestCandidate) {
-                                    mainContent = bestCandidate;
                                 }
                             }
                         }
@@ -505,7 +519,7 @@ class QuotelyPopup {
             }
             
             // Check if content is very large (> 50,000 characters) - for both PDF and HTML
-            if (pageData.content && pageData.content.length > 50000) {
+            if (pageData.content && pageData.content.length > 200000) {
 
                 
                 // Temporarily stop loading to show segment selector
@@ -531,7 +545,7 @@ class QuotelyPopup {
 
             
             // Enforce 50k character limit client-side (safety check)
-            const limitedContent = (pageData.content || '').slice(0, 50000);
+            const limitedContent = (pageData.content || '').slice(0, 200000);
             
 
             // Get quote specificity setting
@@ -685,7 +699,7 @@ class QuotelyPopup {
 
         return new Promise((resolve) => {
             // Create segments
-            const SEGMENT_SIZE = 50000;
+            const SEGMENT_SIZE = 200000;
             const segments = [];
             for (let i = 0; i < fullText.length; i += SEGMENT_SIZE) {
                 const segmentText = fullText.substring(i, Math.min(i + SEGMENT_SIZE, fullText.length));
@@ -713,6 +727,9 @@ class QuotelyPopup {
             const selectorHTML = `
                 <div class="segment-container">
                     <div class="segment-selector">
+                        <div class="segment-help js-tooltip" data-help="Very large documents are split into segments for better processing. Each segment contains at most 200k characters of the text. Select the segment that's most likely to contain quotes related to your topic.">
+                            <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
+                        </div>
                         <p style="margin-bottom: 0px;">Woah, that's a lot of text! (${Math.round(fullText.length / 1000)}k characters)</p>
                         <p style="margin-top: 0; margin-bottom: 8px;">Select a segment to scan:</p>
                         <div class="segments-list">
@@ -732,6 +749,23 @@ class QuotelyPopup {
             // Add event listeners with slight delay to ensure DOM is ready
             setTimeout(() => {
                 const segmentButtons = this.quotesContainer.querySelectorAll('.segment-option');
+                
+                // Add tooltip event listener for segment help
+                const segmentHelp = this.quotesContainer.querySelector('.segment-help.js-tooltip');
+                if (segmentHelp) {
+                    segmentHelp.addEventListener('mouseenter', (e) => {
+                        const rect = segmentHelp.getBoundingClientRect();
+                        const tooltipText = segmentHelp.getAttribute('data-help');
+                        // Position tooltip to the left of the question mark (bottom-left aligned)
+                        const baseX = rect.left - 258; // 250px width + 8px offset to the left of the element
+                        const baseY = rect.top; // Question mark's top edge (for bottom alignment calculation)
+                        this.showTooltip(tooltipText, baseX, baseY);
+                    });
+
+                    segmentHelp.addEventListener('mouseleave', () => {
+                        this.hideTooltip();
+                    });
+                }
 
                 segmentButtons.forEach(btn => {
                     btn.addEventListener('click', () => {
@@ -2132,20 +2166,21 @@ class QuotelyPopup {
         // Get all pinned quotes (universal)
         const pinned = JSON.parse(localStorage.getItem('quotely_pinned') || '[]');
         
-        // Sort quotes: pinned first, then by original order
+        // Sort quotes: pinned first, then by score-based order (already sorted by server)
         quotes.sort((a, b) => {
-            const aIndex = parseInt(a.querySelector('.quote-pin').getAttribute('data-index'));
-            const bIndex = parseInt(b.querySelector('.quote-pin').getAttribute('data-index'));
-            
             const aQuoteText = a.querySelector('.quote-text').textContent.replace(/"/g, '');
             const bQuoteText = b.querySelector('.quote-text').textContent.replace(/"/g, '');
             
             const aPinned = pinned.some(pin => pin.quote === aQuoteText);
             const bPinned = pinned.some(pin => pin.quote === bQuoteText);
             
+            // Pinned quotes first
             if (aPinned && !bPinned) return -1;
             if (!aPinned && bPinned) return 1;
-            return aIndex - bIndex;
+            
+            // For non-pinned quotes, maintain server's score-based order
+            // (quotes are already sorted by relevance score from server)
+            return 0;
         });
         
         // Re-append in new order

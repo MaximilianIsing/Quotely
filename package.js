@@ -5,8 +5,8 @@ const archiver = require('archiver');
 
 // Configuration
 const SOURCE_DIR = path.join(__dirname, 'public');
-const TARGET_DIR = path.join(__dirname, 'Quotely-v1.05');
-const OUTPUT_ZIP = path.join(__dirname, 'Quotely-v1.05.zip');
+const TARGET_DIR = path.join(__dirname, 'Quotely-v1.06');
+const OUTPUT_ZIP = path.join(__dirname, 'Quotely-v1.06.zip');
 
 // API endpoints
 const CSS_MINIFY_API = 'https://www.toptal.com/developers/cssminifier/api/raw';

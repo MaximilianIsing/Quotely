@@ -60,7 +60,7 @@ try {
 // Temporary cache for extracted PDF content (expires after 5 minutes)
 const pdfCache = new Map();
 const PDF_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-const MAX_CACHE_SIZE = 15; // Maximum number of cached PDFs
+const MAX_CACHE_SIZE = 30; // Maximum number of cached PDFs
 
 function cachePdfContent(url, content, isOCR = false) {
     if (Debugging) console.log(`[DEBUG] Caching PDF content for: ${url} (OCR: ${isOCR})`);
@@ -271,7 +271,7 @@ app.post('/api/find-quotes', async (req, res) => {
 
     // Prompt is received; logging is handled later as full GPT input only
 
-    const MAX_CHARS = 50000;
+    const MAX_CHARS = 200000;
     const rawContent = String(pageContent || '').slice(0, MAX_CHARS);
     if (Debugging) console.log(`[DEBUG] Processed content: ${rawContent.length} characters (truncated from ${pageContent?.length || 0})`);
 
@@ -287,6 +287,12 @@ app.post('/api/find-quotes', async (req, res) => {
       } catch {}
     }
     textContent = (textContent || '').replace(/\s+/g, ' ').trim();
+    
+    // Log processed content for non-OCR pages when debugging is enabled
+    if (Debugging && !isOCR) {
+      console.log(`[DEBUG] Processed non-OCR content (${textContent.length} chars):`);
+      console.log(`[DEBUG] Content : ${textContent}`);
+    }
     
     // Split content into potential quote segments
     const sentences = textContent
@@ -428,7 +434,8 @@ app.post('/api/find-quotes', async (req, res) => {
     - If no quotes are highly relevant to the specific topic, return an empty array
     - Preserve the original wording exactly as it appears in the text${ocrNote}
     - For each quote, provide a brief explanation of why it's relevant to the topic
-    - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation"}`;
+    - Rate each quote's relevance to the topic with a score between 1 and 10 (where 10 is perfectly relevant, 5 is moderately relevant, 1 is not relevant)
+    - Return only valid JSON formatted as an array of objects with: {"quote": "exact text", "relevance": "brief explanation", "score": number}`;
 
     const userContent = `Topic: "${topic}"\n\nText segments:\n${relevantQuotes.join('\n\n')}`;
     if (Debugging) console.log(`[DEBUG] Calling GPT-4.1-nano for quote analysis (${userContent.length} characters)`);
@@ -448,6 +455,12 @@ app.post('/api/find-quotes', async (req, res) => {
       temperature: 0.1  
     });
     if (Debugging) console.log(`[DEBUG] GPT response received`);
+    
+    // Log GPT response content when debugging
+    if (Debugging) {
+      console.log(`[DEBUG] GPT Response Content:`);
+      console.log(completion.choices[0]?.message?.content || 'No content received');
+    }
 
     let analyzedQuotes = [];
     try {
@@ -464,9 +477,32 @@ app.post('/api/find-quotes', async (req, res) => {
       // Ensure each quote has a relevance field
       analyzedQuotes = analyzedQuotes.map((item, index) => ({
         quote: item.quote || item,
-        relevance: item.relevance || `AI-analyzed quote #${index + 1}`
+        relevance: item.relevance || `AI-analyzed quote #${index + 1}`,
+        score: item.score || 0
       }));
+      
+      // Sort quotes by score (highest first)
+      analyzedQuotes.sort((a, b) => {
+        const scoreA = a.score || 0;
+        const scoreB = b.score || 0;
+        return scoreB - scoreA; // Descending order (highest scores first)
+      });
+      
       if (Debugging) console.log(`[DEBUG] Successfully parsed ${analyzedQuotes.length} quotes from GPT`);
+      
+      // Remove duplicate quotes based on quote text
+      const seenQuotes = new Set();
+      analyzedQuotes = analyzedQuotes.filter(item => {
+        const quoteText = item.quote.trim().toLowerCase();
+        if (seenQuotes.has(quoteText)) {
+          if (Debugging) console.log(`[DEBUG] Removed duplicate quote: "${item.quote.substring(0, 50)}..."`);
+          return false;
+        }
+        seenQuotes.add(quoteText);
+        return true;
+      });
+      
+      if (Debugging) console.log(`[DEBUG] After deduplication: ${analyzedQuotes.length} unique quotes`);
       
     } catch (e) {
       console.error('JSON parsing failed:', e.message);
@@ -685,7 +721,7 @@ app.post('/api/extract-pdf', async (req, res) => {
           }
 
           // Check if PDF is very large (> 50,000 characters)
-          const SEGMENT_SIZE = 50000;
+          const SEGMENT_SIZE = 200000;
           // Use URL for remote files, or generate a stable cache key for local files
           // Use title + first 100 chars as a more stable identifier
           const cacheKey = url || `local_${title}_${extractedText.substring(0, 100).replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -764,9 +800,9 @@ app.post('/api/get-pdf-segment', async (req, res) => {
       return res.status(404).json({ error: 'PDF content not found in cache. Please re-extract the PDF.' });
     }
     
-    if (Debugging) console.log(`[DEBUG] Cache hit! Found ${cached.content.length} characters`);
+    if (Debugging) console.log  (`[DEBUG] Cache hit! Found ${cached.content.length} characters`);
 
-    const SEGMENT_SIZE = 50000;
+    const SEGMENT_SIZE = 200000;
     const start = segmentIndex * SEGMENT_SIZE;
     const end = Math.min(start + SEGMENT_SIZE, cached.content.length);
     const segmentContent = cached.content.substring(start, end);
