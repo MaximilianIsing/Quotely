@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'https://quotely-rmgh.onrender.com';
+        this.serverUrl = 'http://localhost:3000'; //https://quotely-rmgh.onrender.com
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.isPdfPage = false; // Track if current page is a PDF
@@ -12,7 +12,6 @@ class QuotelyPopup {
         this.segmentStateKey = 'quotely_segment_state'; // State for pending segment selection
         this.tooltipElement = null; // For free-floating tooltip
         this.initializeElements();
-        this.loadServerUrl();
         this.attachEventListeners();
         this.restoreLastSession();
         this.checkPendingSegmentSelection();
@@ -20,6 +19,14 @@ class QuotelyPopup {
         this.restoreSettingsState();
         this.restoreTheme();
         this.restoreSpecificity();
+
+        // If opened as a dedicated upload window, auto-show the PDF dropzone
+        try {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('upload') === '1') {
+                setTimeout(() => this.showPdfDropzone(document.title || 'PDF Upload'), 50);
+            }
+        } catch (e) { /* ignore */ }
 
     }
 
@@ -34,25 +41,6 @@ class QuotelyPopup {
         this.searchIcon = this.findQuotesBtn.querySelector('.search-icon');
         this.loadingSpinner = this.findQuotesBtn.querySelector('.loading-spinner');
         this.createTooltipElement();
-    }
-
-    loadServerUrl() {
-        try {
-            const storedBase = localStorage.getItem('quotely_api_base');
-            if (storedBase && typeof storedBase === 'string') {
-                this.serverUrl = storedBase;
-                return;
-            }
-        } catch (e) {
-            // ignore localStorage errors
-        }
-        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-            chrome.storage.sync.get(['serverUrl'], (res) => {
-                if (res && res.serverUrl) {
-                    this.serverUrl = res.serverUrl;
-                }
-            });
-        }
     }
 
     attachEventListeners() {
@@ -833,6 +821,9 @@ class QuotelyPopup {
                             </span>
                         </div>
                         <input type="file" id="pdf-file-input" accept=".pdf" style="display: none;">
+                        <div style="text-align:center; margin-top: 10px;">
+                            <button id="open-upload-window" class="open-upload-window-btn" style="background: transparent; color: #2563eb; border: none; cursor: pointer; font-family: 'Poppins', sans-serif; font-size: 12px; text-decoration: underline;">Having trouble dragging from Downloads? Open persistent upload window</button>
+                        </div>
                     </div>
                 </div>
             `;
@@ -854,6 +845,7 @@ class QuotelyPopup {
 
             const dropArea = mainContent.querySelector('#pdf-drop-area');
             const fileInput = mainContent.querySelector('#pdf-file-input');
+            const openWindowBtn = mainContent.querySelector('#open-upload-window');
             
             let dragCounter = 0;
             
@@ -861,6 +853,14 @@ class QuotelyPopup {
             dropArea.addEventListener('click', () => {
                 fileInput.click();
             });
+
+            // Open persistent upload window (does not auto-close on focus change)
+            if (openWindowBtn && typeof chrome !== 'undefined' && chrome.windows && chrome.runtime) {
+                openWindowBtn.addEventListener('click', () => {
+                    const url = chrome.runtime.getURL('public/popup.html?upload=1');
+                    chrome.windows.create({ url, type: 'popup', width: 480, height: 720 });
+                });
+            }
             
             // Drag & drop event handlers
             dropArea.addEventListener('dragenter', (e) => {
