@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'http://localhost:3000'; //https://quotely-rmgh.onrender.com
+        this.serverUrl = 'https://quotely-rmgh.onrender.com';
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.isPdfPage = false; // Track if current page is a PDF
@@ -12,6 +12,7 @@ class QuotelyPopup {
         this.segmentStateKey = 'quotely_segment_state'; // State for pending segment selection
         this.tooltipElement = null; // For free-floating tooltip
         this.initializeElements();
+        this.loadServerUrl();
         this.attachEventListeners();
         this.restoreLastSession();
         this.checkPendingSegmentSelection();
@@ -33,6 +34,25 @@ class QuotelyPopup {
         this.searchIcon = this.findQuotesBtn.querySelector('.search-icon');
         this.loadingSpinner = this.findQuotesBtn.querySelector('.loading-spinner');
         this.createTooltipElement();
+    }
+
+    loadServerUrl() {
+        try {
+            const storedBase = localStorage.getItem('quotely_api_base');
+            if (storedBase && typeof storedBase === 'string') {
+                this.serverUrl = storedBase;
+                return;
+            }
+        } catch (e) {
+            // ignore localStorage errors
+        }
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
+            chrome.storage.sync.get(['serverUrl'], (res) => {
+                if (res && res.serverUrl) {
+                    this.serverUrl = res.serverUrl;
+                }
+            });
+        }
     }
 
     attachEventListeners() {
