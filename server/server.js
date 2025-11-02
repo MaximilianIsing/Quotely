@@ -286,7 +286,23 @@ app.post('/api/find-quotes', async (req, res) => {
         textContent = $('body').text();
       } catch {}
     }
-    textContent = (textContent || '').replace(/\s+/g, ' ').trim();
+    
+    // Check for extra spacing issue before collapsing
+    const hasExtraSpacing = /\s{3,}/.test(textContent);
+    if (hasExtraSpacing && Debugging) {
+      console.log(`[DEBUG] Extra spacing detected in content`);
+    } else if (!hasExtraSpacing && Debugging) {
+      console.log(`[DEBUG] No extra spacing detected in content`);
+    }
+    
+    // Handle spacing based on detection
+    if (hasExtraSpacing) {
+      // OCR issue: remove all single spaces, collapse double+ spaces to single space
+      textContent = (textContent || '').replace(/\b \b/g, '').replace(/\s{2,}/g, ' ').trim();
+    } else {
+      // Normal: collapse all whitespace to single space
+      textContent = (textContent || '').replace(/\s+/g, ' ').trim();
+    }
     
     // Log processed content for non-OCR pages when debugging is enabled
     if (Debugging && !isOCR) {

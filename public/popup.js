@@ -1,7 +1,7 @@
 // Quotely Popup Script
 class QuotelyPopup {
     constructor() {
-        this.serverUrl = 'http://localhost:3000'; //https://quotely-rmgh.onrender.com
+        this.serverUrl = 'https://quotely-rmgh.onrender.com';
         this.lastPageTitle = null;
         this.lastPageUrl = null;
         this.isPdfPage = false; // Track if current page is a PDF
@@ -168,7 +168,7 @@ class QuotelyPopup {
             
             // Check if this is a PDF page or docviewer page
             const isPDF = tab.url && (tab.url.includes('.pdf') || tab.url.startsWith('file://') && tab.url.endsWith('.pdf'));
-            const isDocviewer = tab.url && (tab.url.includes('viewer') || tab.url.includes('drive.google.com'));
+            const isDocviewer = tab.url && (tab.url.includes('viewer') || tab.url.includes('drive.google.com') || tab.url.includes('?projector=1'));
             this.isPdfPage = isPDF || isDocviewer; // Store PDF/docviewer status
 
             let pageData;
