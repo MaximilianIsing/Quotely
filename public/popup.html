@@ -55,7 +55,15 @@
 
         <main class="main-content">
             <div class="input-section">
-                <label for="topic-input" class="input-label">What topic are you looking for quotes about?</label>
+                <label for="topic-input" class="input-label">
+                    What topic are you looking for quotes about?
+                    <span class="topic-help js-tooltip" data-help='
+                    To get the best possible results, be very clear about the scope of your topic. <span style="color: #10b981;">
+                        <br><strong>Good prompting:</strong></span> "Specific military tactics in the American Civil War" <span style="color: #ef4444;">
+                        <br><strong>Bad prompting:</strong></span> "Military tactics"'>
+                        <img src="../media/Question Mark.png" alt="?" style="width: 16px; height: 16px;">
+                    </span>
+                </label>
                 <textarea 
                     id="topic-input" 
                     class="topic-input" 
@@ -91,7 +99,7 @@
         </main>
 
         <footer class="footer">
-            <p>Quotely 2025 • Find quotes instantly • v1.06</p>
+            <p>Quotely 2025 • Find quotes instantly • v1.07</p>
         </footer>
     </div>
 

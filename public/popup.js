@@ -106,6 +106,23 @@ class QuotelyPopup {
             });
         });
         
+        // Topic help tooltip event listener
+        const topicHelp = document.querySelector('.topic-help.js-tooltip');
+        if (topicHelp) {
+            topicHelp.addEventListener('mouseenter', (e) => {
+                const rect = topicHelp.getBoundingClientRect();
+                const tooltipText = topicHelp.getAttribute('data-help');
+                // Position tooltip to the left of the question mark (bottom-left aligned)
+                const baseX = rect.left - 308; // 300px width + 8px offset to the left of the element
+                const baseY = rect.top + 80; // Question mark's top edge + 20px down (for bottom alignment calculation)
+                this.showTooltip(tooltipText, baseX, baseY, 300, 290); // Wider tooltip for topic help
+            });
+            
+            topicHelp.addEventListener('mouseleave', () => {
+                this.hideTooltip();
+            });
+        }
+        
         // Click outside to close settings
         document.addEventListener('click', (e) => {
             const settingsBtn = document.getElementById('settings-btn');
@@ -1031,14 +1048,17 @@ class QuotelyPopup {
         document.body.appendChild(this.tooltipElement);
     }
 
-    showTooltip(text, baseX, baseY) {
+    showTooltip(text, baseX, baseY, maxWidth = 250, minWidth = 240) {
+        // Check if text contains HTML (for colored spans)
+        const containsHTML = text.includes('<span');
+        
         // Create a temporary measurement element to calculate height
         const measureDiv = document.createElement('div');
         measureDiv.style.cssText = `
             position: absolute;
             visibility: hidden;
-            width: 240px;
-            max-width: 250px;
+            width: ${minWidth}px;
+            max-width: ${maxWidth}px;
             padding: 10px 14px;
             font-size: 13px;
             line-height: 1.4;
@@ -1048,18 +1068,35 @@ class QuotelyPopup {
             color: #ffffff;
             z-index: -1;
         `;
-        measureDiv.textContent = text;
+        
+        // Use innerHTML if text contains HTML, otherwise textContent
+        if (containsHTML) {
+            measureDiv.innerHTML = text;
+        } else {
+            measureDiv.textContent = text;
+        }
+        
         document.body.appendChild(measureDiv);
 
         // Get the actual height after rendering
         const tooltipHeight = measureDiv.offsetHeight;
         document.body.removeChild(measureDiv);
 
+        // Update tooltip element width
+        this.tooltipElement.style.maxWidth = maxWidth + 'px';
+        this.tooltipElement.style.minWidth = minWidth + 'px';
+
     // Position tooltip so its bottom aligns with the question mark's top
     const tooltipX = baseX;
     const tooltipY = baseY - tooltipHeight + 31; // 18px gap above question mark (moved down 10px)
 
-        this.tooltipElement.textContent = text;
+        // Use innerHTML if text contains HTML, otherwise textContent
+        if (containsHTML) {
+            this.tooltipElement.innerHTML = text;
+        } else {
+            this.tooltipElement.textContent = text;
+        }
+        
         this.tooltipElement.style.left = tooltipX + 'px';
         this.tooltipElement.style.top = tooltipY + 'px';
         this.tooltipElement.style.display = 'block';

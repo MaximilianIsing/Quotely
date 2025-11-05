@@ -121,6 +121,14 @@ body {
     color: #374151;
     margin-bottom: 1px;
     font-size: 14px;
+    position: relative;
+}
+
+.topic-help {
+    cursor: help;
+    margin-left: 6px;
+    display: inline-block;
+    vertical-align: middle;
 }
 
 .topic-input {
@@ -552,24 +560,28 @@ body {
 
 /* Scrollbar styling */
 .quotes-container::-webkit-scrollbar,
-.segment-container::-webkit-scrollbar {
+.segment-container::-webkit-scrollbar,
+.topic-input::-webkit-scrollbar {
     width: 6px;
 }
 
 .quotes-container::-webkit-scrollbar-track,
-.segment-container::-webkit-scrollbar-track {
+.segment-container::-webkit-scrollbar-track,
+.topic-input::-webkit-scrollbar-track {
     background: #ebeef3;
     border-radius: 3px;
 }
 
 .quotes-container::-webkit-scrollbar-thumb,
-.segment-container::-webkit-scrollbar-thumb {
+.segment-container::-webkit-scrollbar-thumb,
+.topic-input::-webkit-scrollbar-thumb {
     background: #cbd5e1;
     border-radius: 3px;
 }
 
 .quotes-container::-webkit-scrollbar-thumb:hover,
-.segment-container::-webkit-scrollbar-thumb:hover {
+.segment-container::-webkit-scrollbar-thumb:hover,
+.topic-input::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
 }
 
@@ -1020,24 +1032,28 @@ body {
 }
 
 .dark-mode .quotes-container::-webkit-scrollbar,
-.dark-mode .segment-container::-webkit-scrollbar {
+.dark-mode .segment-container::-webkit-scrollbar,
+.dark-mode .topic-input::-webkit-scrollbar {
     width: 6px;
 }
 
 .dark-mode .quotes-container::-webkit-scrollbar-track,
-.dark-mode .segment-container::-webkit-scrollbar-track {
+.dark-mode .segment-container::-webkit-scrollbar-track,
+.dark-mode .topic-input::-webkit-scrollbar-track {
     background: #1f2937;
     border-radius: 3px;
 }
 
 .dark-mode .quotes-container::-webkit-scrollbar-thumb,
-.dark-mode .segment-container::-webkit-scrollbar-thumb {
+.dark-mode .segment-container::-webkit-scrollbar-thumb,
+.dark-mode .topic-input::-webkit-scrollbar-thumb {
     background: #4b5563;
     border-radius: 3px;
 }
 
 .dark-mode .quotes-container::-webkit-scrollbar-thumb:hover,
-.dark-mode .segment-container::-webkit-scrollbar-thumb:hover {
+.dark-mode .segment-container::-webkit-scrollbar-thumb:hover,
+.dark-mode .topic-input::-webkit-scrollbar-thumb:hover {
     background: #60a5fa;
 }
 
