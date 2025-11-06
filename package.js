@@ -5,8 +5,8 @@ const archiver = require('archiver');
 
 // Configuration
 const SOURCE_DIR = path.join(__dirname, 'public');
-const TARGET_DIR = path.join(__dirname, 'Quotely-v1.07');
-const OUTPUT_ZIP = path.join(__dirname, 'Quotely-v1.07.zip');
+const TARGET_DIR = path.join(__dirname, 'Quotely-v1.07.1');
+const OUTPUT_ZIP = path.join(__dirname, 'Quotely-v1.07.1.zip');
 
 // API endpoints
 const CSS_MINIFY_API = 'https://www.toptal.com/developers/cssminifier/api/raw';
@@ -157,8 +157,8 @@ async function createZip() {
         
         archive.pipe(output);
         
-        // Add all contents of Quotely-v1.07 directory to zip
-        archive.directory(TARGET_DIR, 'Quotely-v1.07');
+        // Add all contents of Quotely-v1.07.1 directory to zip
+        archive.directory(TARGET_DIR, 'Quotely-v1.07.1');
         
         archive.finalize();
     });
