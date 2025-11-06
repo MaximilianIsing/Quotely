@@ -1,6 +1,6 @@
 {
   "name": "quotely-extension",
-  "version": "1.07",
+  "version": "1.07.1",
   "description": "AI-powered quote finder Chrome extension",
   "main": "server/server.js",
   "scripts": {

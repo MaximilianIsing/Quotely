@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Quotely - AI Quote Finder",
-  "version": "1.07",
+  "version": "1.07.1",
   "description": "Find relevant quotes on any webpage using AI-powered fuzzy matching",
   "permissions": [
     "activeTab",

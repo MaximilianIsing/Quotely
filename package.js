@@ -80,14 +80,14 @@ async function processFiles(sourcePath, targetPath) {
                     const minified = await minify(content, CSS_MINIFY_API);
                     fs.writeFileSync(targetFilePath, minified, 'utf8');
                     console.log(`  ✓ Minified CSS: ${entry.name}`);
-                } else if (ext === '.js') {
-                    // Minify JavaScript
+                } else if (ext === '.js' && entry.name !== 'popup.js') {
+                    // Minify JavaScript (except popup.js which has minification issues)
                     console.log(`  Minifying JavaScript...`);
                     const minified = await minify(content, JS_MINIFY_API);
                     fs.writeFileSync(targetFilePath, minified, 'utf8');
                     console.log(`  ✓ Minified JS: ${entry.name}`);
                 } else {
-                    // Copy other files as-is
+                    // Copy other files as-is (including popup.js)
                     fs.copyFileSync(sourceFilePath, targetFilePath);
                     console.log(`  ✓ Copied: ${entry.name}`);
                 }
@@ -176,31 +176,23 @@ async function main() {
         const publicTarget = path.join(TARGET_DIR, 'public');
         await processFiles(SOURCE_DIR, publicTarget);
         
-        // Step 2: Copy package.json
-        console.log('\n=== Step 2: Copying package.json ===');
-        await copyFile(
-            path.join(__dirname, 'package.json'),
-            path.join(TARGET_DIR, 'package.json')
-        );
-        console.log('✓ Copied package.json');
-        
-        // Step 3: Copy manifest.json
-        console.log('\n=== Step 3: Copying manifest.json ===');
+        // Step 2: Copy manifest.json
+        console.log('\n=== Step 2: Copying manifest.json ===');
         await copyFile(
             path.join(__dirname, 'manifest.json'),
             path.join(TARGET_DIR, 'manifest.json')
         );
         console.log('✓ Copied manifest.json');
         
-        // Step 4: Copy media folder
-        console.log('\n=== Step 4: Copying media folder ===');
+        // Step 3: Copy media folder
+        console.log('\n=== Step 3: Copying media folder ===');
         copyDirectory(
             path.join(__dirname, 'media'),
             path.join(TARGET_DIR, 'media')
         );
         console.log('✓ Copied media folder');
         
-        // Step 5: Create zip archive
+        // Step 4: Create zip archive
         await createZip();
         
         console.log('\n✓ All files processed and packaged successfully!');
