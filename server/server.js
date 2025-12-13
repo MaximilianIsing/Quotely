@@ -30,6 +30,18 @@ if (Debugging) {
   console.log(`[DEBUG] Loaded GPT prompts: ${Object.keys(gptPrompts).join(', ')}`);
 }
 
+// Load endpoint key from endpointkey.txt
+let EndpointKey = '';
+try {
+  const endpointKeyPath = path.join(__dirname, '..', 'endpointkey.txt');
+  EndpointKey = fs.readFileSync(endpointKeyPath, 'utf8').trim();
+  if (Debugging) {
+    console.log(`[DEBUG] Endpoint key loaded successfully`);
+  }
+} catch (error) {
+  console.warn('Could not read endpointkey.txt:', error.message);
+}
+
 // For PDF processing
 let PDFParser;
 try {
@@ -835,6 +847,41 @@ app.post('/api/get-pdf-segment', async (req, res) => {
   } catch (error) {
     console.error('Segment extraction failed:', error.message);
     res.status(500).json({ error: 'Failed to extract segment' });
+  }
+});
+
+// Endpoint to get logs (protected by key)
+app.get('/getlogs', async (req, res) => {
+  try {
+    const { key } = req.query;
+    
+    // Check if key is provided and matches
+    if (!key) {
+      return res.status(401).json({ error: 'Access denied: key parameter required' });
+    }
+    
+    if (key !== EndpointKey) {
+      if (Debugging) console.log(`[DEBUG] Invalid key attempted: ${key}`);
+      return res.status(401).json({ error: 'Access denied: invalid key' });
+    }
+    
+    // Read and return the log file
+    if (!fs.existsSync(LOG_FILE)) {
+      return res.status(404).json({ error: 'Log file not found' });
+    }
+    
+    const logContent = fs.readFileSync(LOG_FILE, 'utf8');
+    
+    // Return as CSV with proper headers
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="requests.csv"');
+    res.send(logContent);
+    
+    if (Debugging) console.log(`[DEBUG] Log file accessed via /getlogs`);
+    
+  } catch (error) {
+    console.error('Error retrieving logs:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve logs' });
   }
 });
 
