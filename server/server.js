@@ -885,6 +885,15 @@ app.get('/getlogs', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    service: 'Quotely',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Quotely server running on port ${PORT}`);
     if (Debugging) console.log(`[DEBUG] Debugging mode is ENABLED`);
